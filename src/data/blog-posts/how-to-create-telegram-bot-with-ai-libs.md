@@ -1,0 +1,318 @@
+---
+title: "Local ComfyUI + InfiniteTalk + Index TTS + Telegram Bot Review"
+slug: how-to-create-telegram-bot-with-ai-libs
+description: "Building a Telegram bot for AI-powered audio and video generation using ComfyUI, InfiniteTalk, and Index TTS hosted locally"
+publishDate: 2026-01-20
+---
+
+# Local ComfyUI + InfiniteTalk + Index TTS + Telegram Bot Review
+
+## Part 1 - Engaging Quick Review of the Bot and Generation Process
+
+Here is the process of generating audio and video in the Telegram bot
+that I host locally on my machine with a 5060ti GPU and 32 gigabytes of RAM.
+
+I do it for fun, some pieces are production ready but
+most of the code was written for learning purposes.
+
+For this generation, I want to create a video of Heisenberg from Breaking Bad saying the famous quote
+"I am the one who knocks."
+First of all, I initiate the command to generate audio or video.
+The bot returns options to choose from.
+We can choose audio first, because later we will use it to generate video from it.
+
+We provide the text prompt to be converted to speech and a reference voice.
+
+After only one minute, we get the audio file.
+
+Then we generate the video.
+
+We provide a text prompt describing the scene we want to generate.
+Since we use InfiniteTalk, we describe the person who speaks directly to the camera.
+We send an image that will be used as the first frame
+and the generated audio file that we created before.
+
+After around three or four minutes, we get the video file.
+
+As you can see, it's cropped to square format and has low resolution
+because I don't want to wait for generation and don't have enough GPU power to generate high-quality video quickly,
+but still, the result is quite good for fun purposes.
+
+Another thing that I want to mention is that doing voice cloning
+and applying it to images of prominent people could be banned in services
+such as ElevenLabs, Gemini, or Sora.
+You don't know for sure whether your generation will succeed or fail.
+For the first generations, you might get lucky and get the result you want,
+but later the service might block you. That's why when you host everything locally or
+rent dedicated hardware, you have full control over what you generate
+and you don't have to worry about bans or restrictions.
+
+Okay, let's continue with Jesse Pinkman now.
+We do everything the same way as with Heisenberg,
+and here is the result.
+As you can see, the result is quite good for fun purposes as well.
+
+So in conclusion, what you can do with this setup is generate fun videos of your favorite characters
+saying whatever you want them to say,
+and you have full control over the generation process.
+Just keep in mind that the quality of the generation depends on your hardware capabilities
+and the models you use for generation.
+
+## Part 2 - Technical Review of ComfyUI Changes
+
+### api.py File Explanation
+
+[View api.py changes on GitHub](https://github.com/sergiycheck/comfyui-infinitetalk/pull/1/files#diff-1ed02c3495a2cbdfb7310b80b4a533d180f77b750ebf1e23a86d0d93e5872178)
+
+This file runs a FastAPI server that generates videos
+using a heavy background worker (infinite_talk_worker) and
+streams real-time job status updates to clients via WebSockets,
+while limiting how many jobs can run at once.
+
+High-level flow:
+
+- Client sends a POST request to start video generation.
+- Server starts the job in a separate process.
+- Job progress and result are pushed into a multiprocessing queue.
+- A WebSocket connection streams status updates back to the client.
+- Only one job at a time is allowed.
+
+We are able to prevent running multiple jobs because we have concurrency control:
+
+```py
+MAX_CONCURRENT_JOBS = 1
+job_semaphore = mp.Semaphore(MAX_CONCURRENT_JOBS)
+```
+
+This Ensures only one generation job can run at the same time
+and pensures only one generation job can run at the same time
+and prevents server overload.
+
+The core generation logic is in:
+
+**Worker process wrapper**
+
+```py
+def infinite_talk_worker_wrapper(...)
+```
+
+Runs inside a separate OS process.
+
+- Runs inside a separate OS process.
+- Sends "started" status immediately.
+- Calls `infinite_talk_worker(...)`.
+- Pushes the final result (or error) into a queue.
+- Always releases the semaphore.
+
+Another interesting thing is the **WebSocket event forwarder**:
+
+```py
+async def ws_event_forwarder(...)
+```
+
+It waits for the client to connect via WebSocket.
+
+- Waits for the client to connect via WebSocket.
+- Reads messages from the multiprocessing queue.
+- Sends JSON updates to the client in real time.
+- Stops on "completed" or "error".
+
+With this functionality, we're able to get the generated video link in the Telegram bot.
+
+The main entry point is the **start generation endpoint**:
+
+```py
+@app.post("/generate-video")
+```
+
+This Tries to acquire the semaphore.
+This:
+
+- Tries to acquire the semaphore.
+- Returns 429 if the server is busy.
+- Creates:
+  - A unique `job_id`
+  - A multiprocessing queue
+  - A new background process
+- Starts a WebSocket forwarder task.
+- Returns the `job_id` to the client.
+
+And the **WebSocket endpoint**:
+
+```py
+@app.websocket("/ws/{job_id}")
+```
+
+What it does:
+
+- Accepts WebSocket connections per job.
+- Stores active connections in memory.
+- Keeps connection alive until client disconnects.
+- Cleans up on disconnect.
+
+### handler.py Explanation
+
+In this file, we have a function named `infinite_talk_worker`
+that accepts:
+
+- Image S3 key
+- Audio S3 key
+- Text prompt
+
+It downloads all the required files from AWS S3 storage
+and then uses them with a ComfyUI workflow that's encapsulated in the
+`generate` function from the `infinitetalk_comfy_reusable` file:
+
+```py
+generate(
+    local_image_name_input_folder=image_path,
+    local_audio_name_input_folder=audio_path,
+    positive_prompt=text_prompt,
+    negative_prompt=negative_prompt,
+    output_video_width=360,
+    output_video_height=400,
+    output_video_prefix=output_video_prefix,
+)
+```
+
+After generation is complete:
+
+- We upload the generated video file to S3
+- Clean up local temporary files
+- Return status with S3 link and key:
+
+```py
+return {"status": "completed", "s3_url": s3_url, "s3_key": generated_video_name}
+```
+
+### infinitetalk_comfy_reusable.py explanation
+
+Explanation
+
+This file contains logic from the ComfyUI workflow.
+
+We used a special ComfyUI extension to generate Python code from the ComfyUI workflow:
+[ComfyUI to Python Extension](https://github.com/pydn/ComfyUI-to-Python-Extension)
+
+### A
+
+After all those changes and some custom utils with s3 interactions
+I start the server with this command
+
+```sh
+python -m uvicorn api:app --host 0.0.0.0 --port 8012
+```
+
+Now comfyui accessible on local network on port 8012 and I can use it in telegram bot
+
+That's the main things that I changed and wanted to mention.
+
+### Review index tts changes
+
+[view index tts changes on gihutb](https://github.com/sergiycheck/index-tts/pull/1/files)
+
+[api.py file changes on github](https://github.com/sergiycheck/index-tts/pull/1/files#diff-1ed02c3495a2cbdfb7310b80b4a533d180f77b750ebf1e23a86d0d93e5872178)
+
+contains the main logic of text to speech generation and it uses the same
+approach as comfyui api file
+we have a semaphore to limit concurrent jobs
+we have a worker wrapper that runs in separate process
+we have a websocket forwarder to stream status updates to the client
+
+and we have two endpoints
+one for starting generation
+and one for websocket connection
+
+core generation happens in this file
+[handler.py](https://github.com/sergiycheck/index-tts/pull/1/files#diff-ac1d62d43a3e7a79cf50e33efb92d91e9f477e36564a97a44bcf4853e962f016)
+it also accepts audio ref s3 key and text prompt
+downlaods required files from s3
+and uses IndexTTS2 class imported from
+
+indextts.infer_v2 module to generate the speech
+
+```py
+tts = IndexTTS2(
+    cfg_path=os.path.join("checkpoints", "config.yaml"),
+    model_dir=os.path.join("checkpoints"),
+    use_fp16=True,
+    use_cuda_kernel=False,
+    use_deepspeed=False,
+)
+
+print("Generating audio...", now_local_str())
+
+output_path = os.path.join(output_dir, f"{uuid.uuid4()}.wav")
+
+tts.infer(
+    spk_audio_prompt=audio_ref_path,
+    text=text_prompt,
+    output_path=output_path,
+    emo_alpha=0.6,
+    use_emo_text=True,
+    use_random=False,
+    verbose=True,
+)
+```
+
+As we can see, generation happens in the `tts.infer` function call.
+After generation is complete,
+we upload the generated audio to S3 and return the S3 link and key to the client.
+
+## Telegram Bot Review
+
+[View bot source code on GitHub](https://github.com/sergiycheck/txt-audio-img-to-video-bot/blob/main/src/index.ts)
+backend generation API. Each generation request is asynchronous,
+so the bot remains responsive while heavy processing happens elsewhere.
+
+After a job starts, the bot opens a dedicated WebSocket connection
+to receive real-time status updates from the backend.
+It forwards progress messages like “started,” “completed,” or “error” directly
+to the user and automatically downloads and sends the final media file when ready.
+WebSocket connections and session state are carefully cleaned up to avoid leaks,
+ensuring stable long-running operation.
+
+we setup websocket handler after we collected all the
+required inputs from the user
+and sent request to comfyui or indextts api
+
+```ts
+setupWebSocketHandler(wsFullUrl, chatId, parsedResponse.job_id, bot);
+
+const activeWebSockets = new Map<string, WebSocket>();
+```
+
+setSockets are stored in memory in a map:
+
+```ts
+const activeWebSockets = new Map<string, WebSocket>();
+```
+
+The `setupWebSocketHandler` function is responsible for:
+
+- Getting the WebSocket key
+- Cleaning up existing WebSocket by key
+- Creating a new WebSocket
+- Setting it in the map
+- Setting up event handlers
+
+After generation is complete, we send a message confirming that
+and download the generated file from S3 and send it to the user:
+
+```ts
+await downloadFromS3AndUploadToTelegram(
+  bot,
+  String(chatId),
+  envConfig.BUCKET_NAME,
+  parsedEvent.s3_key!,
+);
+```
+
+### Conclusions
+
+With this setup, we have a fully functional Telegram bot
+tht leverages local ComfyUI and IndexTTS servers
+to generate AI audio and video on demand.
+
+This was done for fun and learning purposes,
+but the architecture is solid enough for light production use cases as well.
