@@ -1,0 +1,260 @@
+---
+import { getCollection } from 'astro:content';
+
+const allPosts = (await getCollection('posts')).sort(
+  (a, b) => new Date(b.data.publishDate).valueOf() - new Date(a.data.publishDate).valueOf()
+);
+
+// Group posts by their folder path
+const groupedPosts = allPosts.reduce((acc, post) => {
+  // Extract folder from the post id (e.g., "blog-posts/my-post.md" -> "blog-posts")
+  const parts = post.id.split('/');
+  const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : 'root';
+  
+  if (!acc[folder]) {
+    acc[folder] = [];
+  }
+  acc[folder].push(post);
+  return acc;
+}, {} as Record<string, typeof allPosts>);
+
+// Format folder name for display
+const formatFolderName = (folder: string) => {
+  if (folder === 'root') return 'Articles';
+  return folder
+    .split('/')
+    .pop()
+    ?.split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ') || folder;
+};
+
+const { currentSlug } = Astro.props;
+---
+
+<aside class="blog-sidebar" id="blog-sidebar">
+  <div class="sidebar-header">
+    <button class="burger-menu" id="burger-toggle" aria-label="Toggle menu">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+    <h3 class="sidebar-title">Blog Posts</h3>
+  </div>
+  
+  <nav class="sidebar-nav" id="sidebar-nav">
+    {Object.entries(groupedPosts).map(([folder, posts]) => (
+      <div class="folder-group">
+        <div class="folder-header">{formatFolderName(folder)}</div>
+        <ul class="post-list">
+          {posts.map(post => (
+            <li class:list={['post-item', { active: currentSlug === post.data.slug }]}>
+              <a href={`/blog/${post.data.slug}`}>
+                {post.data.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </nav>
+</aside>
+
+<script>
+  // Toggle sidebar on mobile
+  const burgerToggle = document.getElementById('burger-toggle');
+  const sidebar = document.getElementById('blog-sidebar');
+  const sidebarNav = document.getElementById('sidebar-nav');
+
+  burgerToggle?.addEventListener('click', () => {
+    sidebar?.classList.toggle('open');
+    burgerToggle?.classList.toggle('active');
+  });
+
+  // Close sidebar when clicking outside on mobile
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (
+      sidebar?.classList.contains('open') &&
+      !sidebar.contains(target) &&
+      !burgerToggle?.contains(target)
+    ) {
+      sidebar.classList.remove('open');
+      burgerToggle?.classList.remove('active');
+    }
+  });
+
+  // Close sidebar when clicking a link on mobile
+  sidebarNav?.querySelectorAll('a').forEach(link => {
+    link.addEventListener('click', () => {
+      if (window.innerWidth < 1024) {
+        sidebar?.classList.remove('open');
+        burgerToggle?.classList.remove('active');
+      }
+    });
+  });
+</script>
+
+<style>
+  .blog-sidebar {
+    font-family: var(--font-family-sans);
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .sidebar-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+
+  .burger-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    z-index: 100;
+  }
+
+  .burger-menu span {
+    display: block;
+    width: 24px;
+    height: 3px;
+    background: var(--text, #000);
+    transition: all 0.3s ease;
+    border-radius: 2px;
+  }
+
+  .burger-menu.active span:nth-child(1) {
+    transform: rotate(45deg) translate(7px, 7px);
+  }
+
+  .burger-menu.active span:nth-child(2) {
+    opacity: 0;
+  }
+
+  .burger-menu.active span:nth-child(3) {
+    transform: rotate(-45deg) translate(6px, -6px);
+  }
+
+  .sidebar-nav {
+    padding: 1rem;
+    overflow-y: auto;
+    max-height: calc(100vh - 120px);
+  }
+
+  .folder-group {
+    margin-bottom: 1.5rem;
+  }
+
+  .folder-header {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .post-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .post-item a {
+    display: block;
+    padding: 0.5rem 0.75rem;
+    text-decoration: none;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    position: relative;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+    color: var(--text-main);
+  }
+
+  .post-item a::before {
+    content: '';
+    position: absolute;
+    transition: transform 0.3s ease;
+    left: 0.75rem;
+    bottom: 0.35rem;
+    width: calc(100% - 1.5rem);
+    height: 2px;
+    background: var(--text-secondary);
+    transform: scaleX(0);
+  }
+
+  .post-item:not(.active) a:hover {
+    color: var(--text-main);
+  }
+
+  .post-item a:hover::before {
+    transform: scaleX(1);
+  }
+
+  .post-item.active a {
+    opacity: 1;
+    font-weight: 600;
+    color: var(--text-main);
+  }
+
+  .post-item.active a::before {
+    transform: scaleX(1);
+    background: var(--primary-color);
+  }
+
+  /* Mobile: sidebar is hidden by default, slides in when open */
+  @media (max-width: 1023px) {
+    .blog-sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 280px;
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+      z-index: 50;
+      box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+    }
+
+    .blog-sidebar.open {
+      transform: translateX(0);
+    }
+
+    .burger-menu {
+      display: flex;
+    }
+  }
+
+  /* Desktop: sidebar is always visible, burger hidden */
+  @media (min-width: 1024px) {
+    .blog-sidebar {
+      position: sticky;
+      top: 4rem;
+      height: calc(100vh - 5rem);
+      width: 280px;
+      overflow: hidden;
+    }
+
+    .burger-menu {
+      display: none;
+    }
+
+    .sidebar-nav {
+      max-height: calc(100vh - 160px);
+    }
+  }
+</style>

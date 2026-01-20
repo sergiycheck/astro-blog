@@ -3,6 +3,7 @@ import { getCollection, render } from 'astro:content'
 import readingTime from 'reading-time'
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Bio from '../../components/Bio.astro';
+import BlogSidebar from '../../components/BlogSidebar.astro';
 
 export async function getStaticPaths() {
 	const posts = await getCollection('posts')
@@ -20,21 +21,43 @@ const { Content } = await render(post)
 ---
 
 <BaseLayout title={title} description={description} permalink={permalink} current="blog">
-  <header>
-    <p>{publishDate} ~ {readingTimeEstimate}</p>
-    <h1>{title}</h1>
-    <hr />
-  </header>
-  <div class="container">
+  <div class="blog-layout">
+    <BlogSidebar currentSlug={slug} />
+    <div class="blog-content">
+      <header>
+        <p>{publishDate} ~ {readingTimeEstimate}</p>
+        <h1>{title}</h1>
+        <hr />
+      </header>
+      <div class="container">
     <article class="content">
       <Content />
     </article>
-    <hr />
-    <Bio />
+      <hr />
+      <Bio />
+      </div>
+    </div>
   </div>
 </BaseLayout>
 
 <style>
+  .blog-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  @media (min-width: 1024px) {
+    .blog-layout {
+      grid-template-columns: 280px 1fr;
+      gap: 2rem;
+    }
+  }
+
+  .blog-content {
+    min-width: 0;
+  }
+
   header {
     text-align: center;
   }
