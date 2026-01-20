@@ -1,9 +1,9 @@
 ---
 import { getCollection, render } from 'astro:content'
 import readingTime from 'reading-time'
-import BaseLayout from '../../layouts/BaseLayout.astro';
-import Bio from '../../components/Bio.astro';
-import BlogSidebar from '../../components/BlogSidebar.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Bio from '../components/Bio.astro';
+import BlogSidebar from '../components/BlogSidebar.astro';
 
 export async function getStaticPaths() {
 	const posts = await getCollection('posts')

@@ -20,7 +20,7 @@ const groupedPosts = allPosts.reduce((acc, post) => {
 
 // Format folder name for display
 const formatFolderName = (folder: string) => {
-  if (folder === 'root') return 'Articles';
+  if (folder === 'root') return 'Posts';
   return folder
     .split('/')
     .pop()
@@ -39,7 +39,6 @@ const { currentSlug } = Astro.props;
       <span></span>
       <span></span>
     </button>
-    <h3 class="sidebar-title">Blog Posts</h3>
   </div>
   
   <nav class="sidebar-nav" id="sidebar-nav">
@@ -49,7 +48,7 @@ const { currentSlug } = Astro.props;
         <ul class="post-list">
           {posts.map(post => (
             <li class:list={['post-item', { active: currentSlug === post.data.slug }]}>
-              <a href={`/blog/${post.data.slug}`}>
+              <a href={`/${post.data.slug}`}>
                 {post.data.title}
               </a>
             </li>
