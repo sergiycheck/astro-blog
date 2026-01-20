@@ -1,0 +1,55 @@
+---
+title: "Part 5 - Telegram Bot Review"
+slug: how-to-create-telegram-bot-with-ai-libs-part-5
+description: "Bot architecture, WebSocket status streaming, and media delivery"
+publishDate: 2026-01-20
+---
+
+## Telegram Bot Review
+
+[View bot source code on GitHub](https://github.com/sergiycheck/txt-audio-img-to-video-bot/blob/main/src/index.ts)
+backend generation API. Each generation request is asynchronous,
+so the bot remains responsive while heavy processing happens elsewhere.
+
+After a job starts, the bot opens a dedicated WebSocket connection
+to receive real-time status updates from the backend.
+It forwards progress messages like “started,” “completed,” or “error” directly
+to the user and automatically downloads and sends the final media file when ready.
+WebSocket connections and session state are carefully cleaned up to avoid leaks,
+ensuring stable long-running operation.
+
+we setup websocket handler after we collected all the
+required inputs from the user
+and sent request to comfyui or indextts api
+
+```ts
+setupWebSocketHandler(wsFullUrl, chatId, parsedResponse.job_id, bot);
+
+const activeWebSockets = new Map<string, WebSocket>();
+```
+
+setSockets are stored in memory in a map:
+
+```ts
+const activeWebSockets = new Map<string, WebSocket>();
+```
+
+The `setupWebSocketHandler` function is responsible for:
+
+- Getting the WebSocket key
+- Cleaning up existing WebSocket by key
+- Creating a new WebSocket
+- Setting it in the map
+- Setting up event handlers
+
+After generation is complete, we send a message confirming that
+and download the generated file from S3 and send it to the user:
+
+```ts
+await downloadFromS3AndUploadToTelegram(
+  bot,
+  String(chatId),
+  envConfig.BUCKET_NAME,
+  parsedEvent.s3_key!,
+);
+```
