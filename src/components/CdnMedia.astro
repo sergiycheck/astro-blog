@@ -1,0 +1,74 @@
+---
+const {
+  src,
+  type = "image", // 'image' | 'video' | 'audio'
+  poster,
+  controls = true,
+  autoplay = false,
+  loop = false,
+  muted = false,
+  preload = "metadata",
+  ...rest
+} = Astro.props;
+
+const CDN = import.meta.env.PUBLIC_CDN_URL;
+const url = src.startsWith("http") ? src : `${CDN}/${src}`;
+
+const posterUrl = poster && !poster.startsWith("http") ? `${CDN}/${poster}` : poster;
+---
+
+<div class="cdn-media flex items-center justify-center">
+  {
+    type === "image" && (
+      <img class="media mx-auto" src={url} loading="lazy" decoding="async" {...rest} />
+    )
+  }
+
+  {
+    type === "video" && (
+      <video
+        class="media mx-auto"
+        src={url}
+        poster={posterUrl}
+        controls={controls}
+        autoplay={autoplay}
+        loop={loop}
+        muted={muted}
+        preload={preload}
+        playsinline
+        {...rest}
+      />
+    )
+  }
+
+  {
+    type === "audio" && (
+      <audio
+        class="media mx-auto"
+        src={url}
+        controls={controls}
+        autoplay={autoplay}
+        loop={loop}
+        preload={preload}
+        {...rest}
+      />
+    )
+  }
+</div>
+
+<style>
+  .cdn-media {
+    width: 100%;
+  }
+
+  .cdn-media > :is(img, video, audio) {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .cdn-media > video {
+    max-width: 100%;
+    height: auto;
+  }
+</style>

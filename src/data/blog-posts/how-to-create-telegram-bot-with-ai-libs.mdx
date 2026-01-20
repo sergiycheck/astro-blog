@@ -5,9 +5,20 @@ description: "Building a Telegram bot for AI-powered audio and video generation 
 publishDate: 2026-01-20
 ---
 
-# Local ComfyUI + InfiniteTalk + Index TTS + Telegram Bot Review
+import CdnMedia from "../../components/CdnMedia.astro";
 
-## Part 1 - Engaging Quick Review of the Bot and Generation Process
+# Table of Contents
+
+- [Part 1 - Quick Review of the Bot and Generation Process](#part-1---quick-review-of-the-bot-and-generation-process)
+- [Part 2 - Technical Review of ComfyUI Changes](#part-2---technical-review-of-comfyui-changes)
+  - [api.py File Explanation](#api.py-file-explanation)
+  - [handler.py Explanation](#handlerpy-explanation)
+  - [infinitetalk_comfy_reusable.py explanation](#infinitetalkcomfyreusablepy-explanation)
+  - [Review index tts changes](#review-index-tts-changes)
+- [Telegram Bot Review](#telegram-bot-review)
+- [Conclusions](#conclusions)
+
+## Part 1 - Quick Review of the Bot and Generation Process
 
 Here is the process of generating audio and video in the Telegram bot
 that I host locally on my machine with a 5060ti GPU and 32 gigabytes of RAM.
@@ -17,15 +28,46 @@ most of the code was written for learning purposes.
 
 For this generation, I want to create a video of Heisenberg from Breaking Bad saying the famous quote
 "I am the one who knocks."
+
+<CdnMedia
+  type="video"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/i+am+the+one+who+Toks+%23breakingbad+%5B7188179653578771718%5D.webm"
+  alt="Heisenberg from Breaking Bad"
+  width="400"
+/>
+
 First of all, I initiate the command to generate audio or video.
 The bot returns options to choose from.
 We can choose audio first, because later we will use it to generate video from it.
 
+<CdnMedia
+  type="image"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/audio_generation.webp"
+  alt="Telegram bot audio generation screenshot"
+  width="400"
+/>
+
 We provide the text prompt to be converted to speech and a reference voice.
+
+<CdnMedia
+  type="audio"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/Haisenberg+part+10+seconds.mp3"
+/>
 
 After only one minute, we get the audio file.
 
+<CdnMedia
+  type="audio"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/8cd09b39-a9d3-45a0-a38e-d1174edc6540.wav"
+/>
+
 Then we generate the video.
+
+<CdnMedia
+  type="image"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/video_generation.webp"
+  width="400"
+/>
 
 We provide a text prompt describing the scene we want to generate.
 Since we use InfiniteTalk, we describe the person who speaks directly to the camera.
@@ -33,6 +75,13 @@ We send an image that will be used as the first frame
 and the generated audio file that we created before.
 
 After around three or four minutes, we get the video file.
+
+<CdnMedia
+  type="video"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/InfiniTalk_1c578020a4844f28ae2e5875bb5430f9_00001-audio.webm"
+  alt="Heisenberg from Breaking Bad"
+  width="400"
+/>
 
 As you can see, it's cropped to square format and has low resolution
 because I don't want to wait for generation and don't have enough GPU power to generate high-quality video quickly,
@@ -50,6 +99,14 @@ and you don't have to worry about bans or restrictions.
 Okay, let's continue with Jesse Pinkman now.
 We do everything the same way as with Heisenberg,
 and here is the result.
+
+<CdnMedia
+  type="video"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/InfiniTalk_2d1c296f03d343809dd6777903a790ff_00001-audio.webm"
+  alt="Jesse Pinkman from Breaking Bad"
+  width="400"
+/>
+
 As you can see, the result is quite good for fun purposes as well.
 
 So in conclusion, what you can do with this setup is generate fun videos of your favorite characters
