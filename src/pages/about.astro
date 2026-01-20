@@ -30,19 +30,19 @@ const permalink = `${Astro.site.href}about`;
 <style>
   .about-image {
     float: right;
-    margin: -3em -7em 2em 2em;
+    margin: -3em -7em var(--space-2xl) var(--space-2xl);
     max-width: 300px;
   }
 
   .about-image img {
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     margin-bottom: 1.5em;
   }
 
   @media (max-width: 1020px) {
     .about-image {
       float: none;
-      margin: 0 auto 2em;
+      margin: 0 auto var(--space-2xl);
     }
   }
 </style>

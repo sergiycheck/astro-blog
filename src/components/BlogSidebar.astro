@@ -128,9 +128,9 @@ const { currentSlug } = Astro.props;
     display: block;
     width: 24px;
     height: 3px;
-    background: var(--text, #000);
+    background: var(--text-main);
     transition: all 0.3s ease;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
   }
 
   .burger-menu.active span:nth-child(1) {
@@ -192,7 +192,7 @@ const { currentSlug } = Astro.props;
     left: 0.75rem;
     bottom: 0.35rem;
     width: calc(100% - 1.5rem);
-    height: 2px;
+    height: var(--border-width-thin);
     background: var(--text-secondary);
     transform: scaleX(0);
   }
