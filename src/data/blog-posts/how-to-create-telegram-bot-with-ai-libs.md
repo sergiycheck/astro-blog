@@ -5,9 +5,7 @@ description: "Building a Telegram bot for AI-powered audio and video generation 
 publishDate: 2026-01-20
 ---
 
-# Local ComfyUI + InfiniteTalk + Index TTS + Telegram Bot Review
-
-## Part 1 - Engaging Quick Review of the Bot and Generation Process
+## Part 1 - Quick Review of the Bot and Generation Process
 
 Here is the process of generating audio and video in the Telegram bot
 that I host locally on my machine with a 5060ti GPU and 32 gigabytes of RAM.
