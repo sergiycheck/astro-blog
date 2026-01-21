@@ -7,11 +7,135 @@ description: "FastAPI server, concurrency, worker wrapper, and WebSocket status 
 publishDate: 2026-01-20:00:14:00
 ---
 
-## Technical Review of ComfyUI Changes
+## Review of ComfyUI Changes for api integration
 
-### api.py File Explanation
+Table of Contents
 
-[View api.py changes on GitHub](https://github.com/sergiycheck/comfyui-infinitetalk/pull/1/files#diff-1ed02c3495a2cbdfb7310b80b4a533d180f77b750ebf1e23a86d0d93e5872178)
+- [api.py Explanation](#apipy-explanation)
+- [handler.py Explanation](#handlerpy-explanation)
+- [infinitetalk_comfy_reusable.py explanation](#infinitetalk_comfy_reusablepy-explanation)
+- [Gotchas review](#gotchas-review)
+- [Requirements.txt review](#requirementstxt-review)
+- [Utils files review](#utils-files-review)
+- [Resulting file structure](#resulting-file-structure)
+- [Running the server](#running-the-server)
+
+## api.py Explanation
+
+We're creating api.py file that will run FastAPI server
+to handle video generation requests from our Telegram bot.
+
+```py
+from dotenv import load_dotenv
+load_dotenv()
+import sys
+import uuid
+import multiprocessing as mp
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
+import uuid
+import json
+from time_utils import now_local_str
+from handler import infinite_talk_worker
+from typing import Dict
+
+print("Starting API server...")
+
+MAX_CONCURRENT_JOBS = 1
+job_semaphore = mp.Semaphore(MAX_CONCURRENT_JOBS)
+active_connections: Dict[str, WebSocket] = {}
+queues: Dict[str, mp.Queue] = {}
+
+
+class VideoRequest(BaseModel):
+    text_prompt: str
+    image_s3_key: str
+    audio_s3_key: str
+    chat_id: int
+
+
+app = FastAPI()
+
+
+def infinite_talk_worker_wrapper(
+    request: dict, queue: mp.Queue, job_semaphore: mp.Semaphore
+):
+    try:
+        print("Starting generation", now_local_str())
+        queue.put({"status": "started"})
+
+        result = infinite_talk_worker(
+            image_s3_key=request["image_s3_key"],
+            audio_s3_key=request["audio_s3_key"],
+            text_prompt=request["text_prompt"],
+        )
+        result_full = {**result, "chat_id": request["chat_id"]}
+
+        queue.put(result_full)
+
+    except Exception as e:
+        queue.put({"status": "error", "error": str(e)})
+
+    finally:
+        job_semaphore.release()
+
+
+async def ws_event_forwarder(job_id: str, queues: mp.Queue):
+    try:
+        waiting_for_connection_time = 10  # seconds
+        while True:
+            websocket = active_connections.get(job_id)
+            waiting_for_connection_time -= 1
+            await asyncio.sleep(1)
+            if not websocket and waiting_for_connection_time <= 0:
+                break
+            if websocket:
+                break
+
+        while True:
+            msg = await asyncio.to_thread(queues[job_id].get)
+            if hasattr(websocket, "send_text") and callable(
+                getattr(websocket, "send_text")
+            ):
+                await websocket.send_text(json.dumps(msg))
+            if msg["status"] in ("completed", "error"):
+                break
+    except Exception as e:
+        print(f"Error in ws_event_forwarder: {e}")
+        raise e
+
+
+@app.post("/generate-video")
+async def generate_video(request: VideoRequest):
+    acquired = job_semaphore.acquire(block=False)
+    if not acquired:
+        raise HTTPException(429, "Server busy")
+
+    job_id = str(uuid.uuid4())
+    queue = mp.Queue()
+    queues[job_id] = queue
+
+    process = mp.Process(
+        target=infinite_talk_worker_wrapper, args=(request.dict(), queue, job_semaphore)
+    )
+    process.start()
+    asyncio.create_task(ws_event_forwarder(job_id, queues))
+
+    return {"job_id": job_id, "ws_url": f"/ws/{job_id}"}
+
+
+@app.websocket("/ws/{job_id}")
+async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    active_connections[job_id] = websocket
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        active_connections.pop(job_id, None)
+```
 
 This file runs a FastAPI server that generates videos
 using a heavy background worker (infinite_talk_worker) and
@@ -34,7 +158,6 @@ job_semaphore = mp.Semaphore(MAX_CONCURRENT_JOBS)
 ```
 
 This Ensures only one generation job can run at the same time
-and pensures only one generation job can run at the same time
 and prevents server overload.
 
 The core generation logic is in:
@@ -45,7 +168,7 @@ The core generation logic is in:
 def infinite_talk_worker_wrapper(...)
 ```
 
-Runs inside a separate OS process.
+What it does:
 
 - Runs inside a separate OS process.
 - Sends "started" status immediately.
@@ -59,7 +182,7 @@ Another interesting thing is the **WebSocket event forwarder**:
 async def ws_event_forwarder(...)
 ```
 
-It waits for the client to connect via WebSocket.
+What it does:
 
 - Waits for the client to connect via WebSocket.
 - Reads messages from the multiprocessing queue.
@@ -99,7 +222,125 @@ What it does:
 - Keeps connection alive until client disconnects.
 - Cleans up on disconnect.
 
+**API Server Summary: Video Generation Handler**
+
+| Component                | Responsibility                        | Technical Implementation                 |
+| :----------------------- | :------------------------------------ | :--------------------------------------- |
+| **Framework**            | Web API & Routing                     | `FastAPI`                                |
+| **Concurrency Limit**    | Prevents server overload (GPU safety) | `multiprocessing.Semaphore` (Max 1)      |
+| **Task Execution**       | Offloading heavy AI logic             | `multiprocessing.Process` (Non-blocking) |
+| **In-Process Messaging** | Sending status from worker to API     | `multiprocessing.Queue`                  |
+| **Client Notification**  | Real-time status updates              | `WebSocket` (`/ws/{job_id}`)             |
+| **Input Validation**     | Schema for incoming requests          | `Pydantic` (`VideoRequest` model)        |
+| **Job Identification**   | Unique tracking for requests          | `uuid.uuid4`                             |
+| **Bridge Logic**         | Monitoring queue for WS updates       | `asyncio` Task (`ws_event_forwarder`)    |
+
+---
+
 ### handler.py Explanation
+
+Let's break down the `handler.py` file.
+
+```py
+import multiprocessing as mp
+import os
+import json
+from boto3_utils import download_s3_file, upload_s3_file
+from time_utils import now_local_str
+import uuid
+from infinitetalk_comfy_reusable import (
+    infinitetalk_comfyui_generation_pipeline as generate,
+)
+
+print("Initializing infinite_talk_worker...", now_local_str())
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def infinite_talk_worker(image_s3_key: str, audio_s3_key: str, text_prompt: str):
+    try:
+        bucket_name = os.getenv("S3_BUCKET_NAME")
+
+        if not bucket_name:
+            raise RuntimeError("S3_BUCKET_NAME environment variable is not set")
+
+        output_path = os.path.join(BASE_DIR, "output")
+
+        os.makedirs(output_path, exist_ok=True)
+
+        print("Downloding image from s3", now_local_str())
+
+        image_path = download_s3_file(
+            bucket=bucket_name, key=image_s3_key, local_path=output_path
+        )
+
+        print("Downloding audio from s3", now_local_str())
+
+        audio_path = download_s3_file(
+            bucket=bucket_name, key=audio_s3_key, local_path=output_path
+        )
+
+        print("Generating video...", now_local_str())
+
+        negative_prompt = "bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
+
+        ouput_video_prefix = f"InfiniTalk_{uuid.uuid4().hex}"
+
+        generate(
+            local_image_name_input_folder=image_path,
+            local_audio_name_input_folder=audio_path,
+            posivite_prompt=text_prompt,
+            negative_prompt=negative_prompt,
+            output_video_width=360,
+            output_video_height=400,
+            output_video_prefix=ouput_video_prefix,
+        )
+
+        generated_video_path_matches = [
+            os.path.join(output_path, f)
+            for f in os.listdir(output_path)
+            if f.startswith(ouput_video_prefix)
+            and os.path.isfile(os.path.join(output_path, f))
+            # we want to find file in this format InfiniteTalk_uuid_00001-audio.mp4
+            and "-audio" in f
+        ]
+
+        if len(generated_video_path_matches) != 1:
+            raise RuntimeError(
+                f"Expected exactly 1 video, found {len(generated_video_path_matches)}"
+            )
+
+        generated_video_path = generated_video_path_matches[0]
+        muted_generated_video_path = generated_video_path.replace("-audio", "")
+        generated_image_to_video_path = muted_generated_video_path.replace("mp4", "png")
+
+        print("Generated video:", generated_video_path)
+
+        upload_s3_file(
+            local_path=generated_video_path,
+            bucket=bucket_name,
+        )
+
+        generated_video_name = os.path.basename(generated_video_path)
+        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{generated_video_name}"
+
+        print("Job completed.", now_local_str())
+        print("Generated video S3 URL:", s3_url)
+
+        return {"status": "completed", "s3_url": s3_url, "s3_key": generated_video_name}
+
+    except Exception as e:
+        print(f"Error in infinite_talk_worker: {e}")
+
+        return {"status": "error", "error": str(e)}
+
+    finally:
+        os.remove(image_path)
+        os.remove(audio_path)
+        os.remove(generated_video_path)
+        os.remove(muted_generated_video_path)
+        os.remove(generated_image_to_video_path)
+```
 
 In this file, we have a function named `infinite_talk_worker`
 that accepts:
@@ -134,24 +375,571 @@ After generation is complete:
 return {"status": "completed", "s3_url": s3_url, "s3_key": generated_video_name}
 ```
 
+## 🛠️ Key Technical Details
+
+### 1. ComfyUI Integration
+
+The core logic relies on `infinitetalk_comfyui_generation_pipeline`.
+It specifically requests a fixed resolution of **360x400**,
+which suggests it is optimized for quick local generation.
+
+2. File Pattern Matching
+
+The script uses a strict naming convention to find the generated output:
+
+- Matches prefixes using a `uuid.uuid4().hex`.
+- Specifically looks for `-audio` in the filename, indicating that the pipeline
+  produces both a muted version and a final version with synced audio.
+
+3.  Safety & Robustness
+
+- **Environment Validation**: Immediately checks for `S3_BUCKET_NAME` to avoid late-stage failures.
+- **Error Handling**: Returns a structured dictionary `{"status": "error", "error": ...}` which is easily parsed by the API's WebSocket forwarder.
+- **Mandatory Cleanup**: The `finally` block ensures that even if the generation fails, the high-resolution images and videos are wiped from the local drive.
+
+📋 Summary Table
+
+| Step           | Action              | Tool/Library                       |
+| :------------- | :------------------ | :--------------------------------- |
+| **Download**   | Fetch Image/Audio   | `boto3_utils` (S3)                 |
+| **Workspace**  | Create `/output`    | `os`                               |
+| **AI Logic**   | Image-to-Video Sync | `infinitetalk_comfy_reusable`      |
+| **Validation** | Verify file exists  | `os.listdir` + Regex-like matching |
+| **Upload**     | Push video to Cloud | `boto3_utils` (S3)                 |
+| **Cleanup**    | `os.remove()`       | Local File System                  |
+
 ### infinitetalk_comfy_reusable.py explanation
 
-Explanation
+Lets break down the `infinitetalk_comfy_reusable.py` file.
 
-This file contains logic from the ComfyUI workflow.
+```py
+import os
+import random
+import sys
+from typing import Sequence, Mapping, Any, Union
+import torch
 
-We used a special ComfyUI extension to generate Python code from the ComfyUI workflow:
-[ComfyUI to Python Extension](https://github.com/pydn/ComfyUI-to-Python-Extension)
+print("Importing ComfyUI reusable InfiniteTalk generation pipeline...")
 
-### A
+repo_root = os.path.dirname(os.path.abspath(__file__))
 
-After all those changes and some custom utils with s3 interactions
-I start the server with this command
+# check if current os is windows
+# normalize sys.path path for Windows
+if os.name == "nt":
+    print("os.name", os.name)
+    sys_path = [os.path.normpath(p) for p in sys.path]
+    repo_root = os.path.normpath(repo_root)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+print("sys.path: after", sys.path)
+
+
+def get_value_at_index(obj: Union[Sequence, Mapping], index: int) -> Any:
+    """Returns the value at the given index of a sequence or mapping.
+    If the object is a sequence (like list or string), returns the value at the given index.
+    If the object is a mapping (like a dictionary), returns the value at the index-th key.
+    Some return a dictionary, in these cases, we look for the "results" key
+    Args:
+        obj (Union[Sequence, Mapping]): The object to retrieve the value from.
+        index (int): The index of the value to retrieve.
+    Returns:
+        Any: The value at the given index.
+    Raises:
+        IndexError: If the index is out of bounds for the object and the object is not a mapping.
+    """
+    try:
+        return obj[index]
+    except KeyError:
+        return obj["result"][index]
+
+
+def import_custom_nodes() -> None:
+    """Find all custom nodes in the custom_nodes folder and add those node objects to NODE_CLASS_MAPPINGS
+    This function sets up a new asyncio event loop, initializes the PromptServer,
+    creates a PromptQueue, and initializes the custom nodes.
+    """
+    import asyncio
+    import execution
+    from nodes import init_extra_nodes
+
+    import server
+
+    # Creating a new event loop and setting it as the default loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Creating an instance of PromptServer with the loop
+    server_instance = server.PromptServer(loop)
+    execution.PromptQueue(server_instance)
+
+    # Initializing custom nodes
+    asyncio.run(init_extra_nodes())
+
+
+from nodes import NODE_CLASS_MAPPINGS
+
+
+def infinitetalk_comfyui_generation_pipeline(
+    local_audio_name_input_folder: str = "",
+    posivite_prompt: str = "",
+    negative_prompt: str = "",
+    local_image_name_input_folder: str = "",
+    output_video_width: int = 360,
+    output_video_height: int = 400,
+    output_video_prefix: str = "WanVideo2_1_InfiniteTalk",
+):
+    import_custom_nodes()
+    with torch.inference_mode():
+        multitalkmodelloader = NODE_CLASS_MAPPINGS["MultiTalkModelLoader"]()
+        multitalkmodelloader_120 = multitalkmodelloader.loadmodel(
+            model="Wan2_1-InfiniTetalk-Single_fp16.safetensors"
+        )
+
+        loadaudio = NODE_CLASS_MAPPINGS["LoadAudio"]()
+        loadaudio_125 = loadaudio.EXECUTE_NORMALIZED(
+            audio=local_audio_name_input_folder,
+        )
+
+        wanvideovaeloader = NODE_CLASS_MAPPINGS["WanVideoVAELoader"]()
+        wanvideovaeloader_129 = wanvideovaeloader.loadmodel(
+            model_name="Wan2_1_VAE_bf16.safetensors", precision="bf16"
+        )
+
+        wanvideoblockswap = NODE_CLASS_MAPPINGS["WanVideoBlockSwap"]()
+        wanvideoblockswap_134 = wanvideoblockswap.setargs(
+            blocks_to_swap=20,
+            offload_img_emb=False,
+            offload_txt_emb=False,
+            use_non_blocking=True,
+            vace_blocks_to_swap=0,
+            prefetch_blocks=1,
+            block_swap_debug=False,
+        )
+
+        downloadandloadwav2vecmodel = NODE_CLASS_MAPPINGS[
+            "DownloadAndLoadWav2VecModel"
+        ]()
+        downloadandloadwav2vecmodel_137 = downloadandloadwav2vecmodel.loadmodel(
+            model="facebook/wav2vec2-base-960h",
+            base_precision="fp16",
+            load_device="main_device",
+        )
+
+        wanvideoloraselect = NODE_CLASS_MAPPINGS["WanVideoLoraSelect"]()
+        wanvideoloraselect_138 = wanvideoloraselect.getlorapath(
+            lora="lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors",
+            strength=1,
+            low_mem_load=False,
+            merge_loras=False,
+            unique_id=5920341728520119629,
+        )
+
+        wanvideotorchcompilesettings = NODE_CLASS_MAPPINGS[
+            "WanVideoTorchCompileSettings"
+        ]()
+        wanvideotorchcompilesettings_177 = wanvideotorchcompilesettings.set_args(
+            backend="inductor",
+            fullgraph=False,
+            mode="default",
+            dynamic=False,
+            dynamo_cache_size_limit=64,
+            compile_transformer_blocks_only=True,
+            dynamo_recompile_limit=128,
+            force_parameter_static_shapes=False,
+            allow_unmerged_lora_compile=False,
+        )
+
+        clipvisionloader = NODE_CLASS_MAPPINGS["CLIPVisionLoader"]()
+        clipvisionloader_238 = clipvisionloader.load_clip(
+            clip_name="clip_vision_h.safetensors"
+        )
+
+        wanvideotextencodecached = NODE_CLASS_MAPPINGS["WanVideoTextEncodeCached"]()
+        wanvideotextencodecached_241 = wanvideotextencodecached.process(
+            model_name="umt5-xxl-enc-bf16.safetensors",
+            precision="bf16",
+            positive_prompt=posivite_prompt,
+            negative_prompt=negative_prompt,
+            quantization="disabled",
+            use_disk_cache=False,
+            device="gpu",
+        )
+
+        intconstant = NODE_CLASS_MAPPINGS["INTConstant"]()
+        intconstant_245 = intconstant.get_value(value=640)
+
+        intconstant_246 = intconstant.get_value(value=640)
+
+        intconstant_270 = intconstant.get_value(value=500)
+
+        loadimage = NODE_CLASS_MAPPINGS["LoadImage"]()
+        loadimage_284 = loadimage.load_image(image=local_image_name_input_folder)
+
+        wav2vecmodelloader = NODE_CLASS_MAPPINGS["Wav2VecModelLoader"]()
+        wav2vecmodelloader_300 = wav2vecmodelloader.loadmodel(
+            model="wav2vec2-chinese-base_fp16.safetensors",
+            base_precision="fp16",
+            load_device="main_device",
+        )
+
+        melbandroformermodelloader = NODE_CLASS_MAPPINGS["MelBandRoFormerModelLoader"]()
+        melbandroformermodelloader_301 = melbandroformermodelloader.loadmodel(
+            model_name="MelBandRoformer_fp16.safetensors"
+        )
+
+        wanvideomodelloader = NODE_CLASS_MAPPINGS["WanVideoModelLoader"]()
+        imageresizekjv2 = NODE_CLASS_MAPPINGS["ImageResizeKJv2"]()
+        getimagesizeandcount = NODE_CLASS_MAPPINGS["GetImageSizeAndCount"]()
+        wanvideoclipvisionencode = NODE_CLASS_MAPPINGS["WanVideoClipVisionEncode"]()
+        wanvideoimagetovideomultitalk = NODE_CLASS_MAPPINGS[
+            "WanVideoImageToVideoMultiTalk"
+        ]()
+        melbandroformersampler = NODE_CLASS_MAPPINGS["MelBandRoFormerSampler"]()
+        multitalkwav2vecembeds = NODE_CLASS_MAPPINGS["MultiTalkWav2VecEmbeds"]()
+        wanvideosampler = NODE_CLASS_MAPPINGS["WanVideoSampler"]()
+        wanvideopassimagesfromsamples = NODE_CLASS_MAPPINGS[
+            "WanVideoPassImagesFromSamples"
+        ]()
+        vhs_videocombine = NODE_CLASS_MAPPINGS["VHS_VideoCombine"]()
+        previewany = NODE_CLASS_MAPPINGS["PreviewAny"]()
+
+        for q in range(1):
+            wanvideomodelloader_122 = wanvideomodelloader.loadmodel(
+                model="Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors",
+                base_precision="fp16_fast",
+                quantization="disabled",
+                load_device="offload_device",
+                attention_mode="sageattn",
+                rms_norm_function="default",
+                block_swap_args=get_value_at_index(wanvideoblockswap_134, 0),
+                lora=get_value_at_index(wanvideoloraselect_138, 0),
+                multitalk_model=get_value_at_index(multitalkmodelloader_120, 0),
+            )
+
+            imageresizekjv2_281 = imageresizekjv2.resize(
+                width=output_video_width,
+                height=output_video_height,
+                upscale_method="lanczos",
+                keep_proportion="crop",
+                pad_color="0, 0, 0",
+                crop_position="center",
+                divisible_by=16,
+                device="cpu",
+                image=get_value_at_index(loadimage_284, 0),
+                unique_id=3263049560651295671,
+            )
+
+            getimagesizeandcount_291 = getimagesizeandcount.getsize(
+                image=get_value_at_index(imageresizekjv2_281, 0)
+            )
+
+            wanvideoclipvisionencode_237 = wanvideoclipvisionencode.process(
+                strength_1=1,
+                strength_2=1,
+                crop="center",
+                combine_embeds="average",
+                force_offload=True,
+                tiles=0,
+                ratio=0.5,
+                clip_vision=get_value_at_index(clipvisionloader_238, 0),
+                image_1=get_value_at_index(getimagesizeandcount_291, 0),
+            )
+
+            wanvideoimagetovideomultitalk_192 = wanvideoimagetovideomultitalk.process(
+                width=get_value_at_index(getimagesizeandcount_291, 1),
+                height=get_value_at_index(getimagesizeandcount_291, 2),
+                frame_window_size=81,
+                motion_frame=9,
+                force_offload=False,
+                colormatch="disabled",
+                tiled_vae=False,
+                mode="infinitetalk",
+                output_path="",
+                vae=get_value_at_index(wanvideovaeloader_129, 0),
+                start_image=get_value_at_index(getimagesizeandcount_291, 0),
+                clip_embeds=get_value_at_index(wanvideoclipvisionencode_237, 0),
+            )
+
+            melbandroformersampler_302 = melbandroformersampler.process(
+                model=get_value_at_index(melbandroformermodelloader_301, 0),
+                audio=get_value_at_index(loadaudio_125, 0),
+            )
+
+            multitalkwav2vecembeds_194 = multitalkwav2vecembeds.process(
+                normalize_loudness=True,
+                num_frames=get_value_at_index(intconstant_270, 0),
+                fps=25,
+                audio_scale=1,
+                audio_cfg_scale=1,
+                multi_audio_type="para",
+                wav2vec_model=get_value_at_index(wav2vecmodelloader_300, 0),
+                audio_1=get_value_at_index(melbandroformersampler_302, 0),
+            )
+
+            wanvideosampler_128 = wanvideosampler.process(
+                steps=6,
+                cfg=1.0000000000000002,
+                shift=11.000000000000002,
+                seed=random.randint(1, 2**64),
+                force_offload=True,
+                scheduler="dpm++_sde",
+                riflex_freq_index=0,
+                denoise_strength=1,
+                batched_cfg=False,
+                rope_function="comfy",
+                start_step=0,
+                end_step=-1,
+                add_noise_to_samples=True,
+                model=get_value_at_index(wanvideomodelloader_122, 0),
+                image_embeds=get_value_at_index(wanvideoimagetovideomultitalk_192, 0),
+                text_embeds=get_value_at_index(wanvideotextencodecached_241, 0),
+                multitalk_embeds=get_value_at_index(multitalkwav2vecembeds_194, 0),
+            )
+
+            wanvideopassimagesfromsamples_309 = wanvideopassimagesfromsamples.decode(
+                samples=get_value_at_index(wanvideosampler_128, 0)
+            )
+
+            vhs_videocombine_131 = vhs_videocombine.combine_video(
+                frame_rate=25,
+                loop_count=0,
+                filename_prefix=output_video_prefix,
+                format="video/h264-mp4",
+                pix_fmt="yuv420p",
+                crf=19,
+                save_metadata=False,
+                trim_to_audio=False,
+                pingpong=False,
+                save_output=True,
+                images=get_value_at_index(wanvideopassimagesfromsamples_309, 0),
+                audio=get_value_at_index(multitalkwav2vecembeds_194, 1),
+                unique_id=8010458614611924935,
+            )
+
+            previewany_293 = previewany.main(
+                source=get_value_at_index(multitalkwav2vecembeds_194, 2)
+            )
+
+```
+
+**Summary of ComfyUI Generated Python Pipeline**
+
+This Python script is a **programmatic version of a ComfyUI workflow**
+for generating InfiniteTalk videos.
+It automates all the steps from loading audio/images to producing the final video.
+
+**Key Features of the Pipeline**
+
+- **Custom Node Support**  
+  Imports all custom ComfyUI nodes and initializes them automatically.
+
+- **Model Loading**  
+  Loads required models:
+  - Infinitetalk model
+  - WanVideo VAE
+  - CLIP Vision
+  - Wav2Vec audio model
+  - MelBandRoFormer audio model
+  - LoRA models
+
+- **Audio Processing**  
+  Converts input audio into embeddings usable by the Infinitetalk pipeline.
+
+- **Image Processing**
+  - Loads and resizes images
+  - Encodes images into embeddings with CLIP
+  - Prepares them for animation
+
+- **Video Generation**
+  - Combines image and audio embeddings
+  - Runs sampling using Infinitetalk + scheduler nodes
+  - Decodes frames and merges with audio
+
+- **Output**
+  - Generates synchronized MP4 video
+  - Uses specified width, height, and filename prefix
+  - Optionally previews results
+
+- **Automation**
+  - Fully headless (no GUI required)
+  - Can run in loops for batch processing
+  - Handles random seeds, device placement, and precision settings
+
+### Gotchas review
+
+To make generated comfyui to python pipeline work I had to change few things in comfyui source code
+
+1. File main.py
+
+```py
+# ...
+comfy.options.enable_args_parsing(False)
+# ...
+```
+
+At the begining of main.py file we have to disable args parsing
+because it conflicts with uvicorn and fastapi args parsing and produces error on server
+start.
+
+2. File nodes.py
+
+We have to remove this line
+
+```py
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "comfy"))
+```
+
+because it conflicts with our repo root path and comfyui custom nodes loading.
+
+### Requirements.txt review
+
+To make comfyui work with our FastAPI server and S3 storage I had to add few dependencies to comfyui requirements.txt file
+
+```txt
+# Hugging Face
+huggingface_hub
+
+# FastAPI stack
+fastapi[standard]
+uvicorn
+
+# AWS
+boto3
+
+# Data validation
+pydantic
+
+# Environment variables
+python-dotenv
+
+# WebSocket support
+websockets
+```
+
+### Utils files review
+
+To intact with S3 storage I created `boto3_utils.py` file
+
+```py
+import os
+import boto3
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+load_dotenv()
+
+s3 = boto3.client("s3")
+
+
+def download_s3_file(bucket: str, key: str, local_path: str) -> str:
+    """
+    Download an S3 object to a local file.
+    """
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+    file_name = key.split("/")[-1]
+    local_path = os.path.join(local_path, file_name)
+    try:
+        s3.download_file(bucket, key, local_path)
+    except ClientError as e:
+        raise RuntimeError(f"Failed to download s3://{bucket}/{key}: {e}")
+
+    return local_path
+
+
+def upload_s3_file(local_path: str, bucket, object_name= None):
+    """
+    Upload a local file to S3.
+    """
+    if not os.path.exists(local_path):
+        raise FileNotFoundError(local_path)
+
+    if object_name is None:
+        object_name = os.path.basename(local_path)
+
+    try:
+        s3.upload_file(local_path, bucket, object_name)
+    except ClientError as e:
+        raise RuntimeError(f"Failed to upload {local_path} to s3://{bucket}/{object_name}: {e}")
+
+```
+
+It has two main functions:
+
+- `download_s3_file`: Downloads a file from S3 to a local path.
+- `upload_s3_file`: Uploads a local file to S3.
+
+To generate local time I create `time_utils.py` file
+
+```py
+from datetime import datetime
+
+def now_local_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+```
+
+### Resulting file structure
+
+```sh
+├── alembic.ini
+├── alembic_db
+├── api.py
+├── api_readme.md
+├── api_server
+├── app
+├── boto3_utils.py
+├── CODEOWNERS
+├── comfy
+├── comfyui_version.py
+├── comfy_api
+├── comfy_api_nodes
+├── comfy_config
+├── comfy_execution
+├── comfy_extras
+├── CONTRIBUTING.md
+├── cuda_malloc.py
+├── custom_nodes
+├── deps.sh
+├── Dockerfile
+├── execution.py
+├── extra_model_paths.yaml.example
+├── folder_paths.py
+├── handler.py
+├── hook_breaker_ac10a0.py
+├── infinitetalk_comfy.py
+├── infinitetalk_comfy_reusable.py
+├── input
+├── latent_preview.py
+├── LICENSE
+├── main.py
+├── manager_requirements.txt
+├── middleware
+├── new_updater.py
+├── nodes.py
+├── node_helpers.py
+├── output
+├── protocol.py
+├── pyproject.toml
+├── pytest.ini
+├── QUANTIZATION.md
+├── README.md
+├── requirements.txt
+├── script_examples
+├── server.py
+├── temp
+├── tests
+├── tests-unit
+├── time_utils.py
+├── user
+├── utils
+```
+
+### Running the server
 
 ```sh
 python -m uvicorn api:app --host 0.0.0.0 --port 8012
 ```
 
-Now comfyui accessible on local network on port 8012 and I can use it in telegram bot
+Now comfyui accessible on local network on port 8012 and I can use it in telegram bot.
 
 That's the main things that I changed and wanted to mention.

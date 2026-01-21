@@ -229,3 +229,33 @@ Here is a table of the models that are needed for this workflow:
 | Wav2Vec2 Chinese Base (FP16)      | [Kijai/wav2vec2_safetensors](https://huggingface.co/Kijai/wav2vec2_safetensors)                     | models/wav2vec2         |
 
 After installation all the required models your ready to run the workflow!
+
+### ComfyUI to python extension
+
+We need this extension to be able to run comfyui workflows from python code and reuse workflow from local fastapi server.
+
+Follow instruction from the repository to install it:
+[ComfyUI to Python Extension](https://github.com/pydn/ComfyUI-to-Python-Extension)
+
+> The ComfyUI-to-Python-Extension is a powerful tool that translates ComfyUI workflows into executable Python code.
+> Designed to bridge the gap between ComfyUI's visual interface and Python's programming environment,
+> this script facilitates the seamless transition from design to code execution.
+> Whether you're a data scientist, a software developer, or an AI enthusiast,
+> this tool streamlines the process of implementing ComfyUI workflows in Python.
+
+After you install it you we able to access it here:
+
+<CdnMedia
+  type="image"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/comfyui-to-code.webp"
+  alt="ComfyUI to Python Extension UI Screenshot"
+/>
+
+After you export the code from the workflow you will have runnable version of the workflow
+that you can place in the root of the comfyui and run it with python with this command
+
+```sh
+python infinitetalk_comfy_reusable.py
+```
+
+This will run the workflow with default parameters that are set in the code.
