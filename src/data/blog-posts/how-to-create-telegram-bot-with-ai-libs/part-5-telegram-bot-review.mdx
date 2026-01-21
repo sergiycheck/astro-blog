@@ -10,3 +10,893 @@ publishDate: 2026-01-20:00:16:00
 ## Implementation of the telegram bot
 
 Table of Contents
+
+- [Bot schemas implementation](#bot-schemas-implementation)
+- [config.ts implementation](#configts-implementation)
+- [env file example](#env-file-example)
+- [endpoints.ts implementation](#endpointsts-implementation)
+- [api.ts implementation](#apits-implementation)
+- [s3-client implementation](#s3-client-implementation)
+- [index.ts implementation](#indexts-implementation)
+- [generation keyboard](#generation-keyboardts-implementation)
+
+We will look through the main parts of the telegram bot implementation
+that you can find in this repository [txt-audio-img-to-video-bot](https://github.com/sergiycheck/txt-audio-img-to-video-bot)
+
+### Bot schemas implementation
+
+We create schemas.ts file to define the data structures
+that will be used in the bot implementation.
+
+```ts
+import { Context } from "telegraf";
+import { z } from "zod";
+
+export interface CustomContext extends Context {
+  session?: {
+    // audio generation
+    generateAudioInProgress: boolean;
+    sendingTextPromptForAudioGeneration: boolean;
+    textPrompt: string;
+    sendingAudioRefForAudioGeneration: boolean;
+    audioRefS3Key: string;
+
+    // video generation
+    generateVideoInProgress: boolean;
+    sendingTextPromptForVideoGeneration: boolean;
+    textPromptForVideo: string;
+    sendingImageForVideoGeneration: boolean;
+    imageForVideoS3Key: string;
+    sendingAudioForVideoGeneration: boolean;
+    audioForVideoS3Key: string;
+  };
+}
+
+export const envSchema = z.object({
+  API_URL_AUDIO_GEN: z.string(),
+  API_URL_VIDEO_GEN: z.string(),
+
+  // Telegram Bot Credentials
+  PORT: z.string(),
+  BOT_TOKEN: z.string(),
+  WEBHOOK_DOMAIN: z.string(),
+  CHAT_ID: z.string(),
+
+  // AWS S3 Credentials
+  AWS_ACCESS_KEY: z.string(),
+  AWS_SECRET_KEY: z.string(),
+  AWS_REGION: z.string(),
+  BUCKET_NAME: z.string(),
+});
+
+export type Env = Required<z.infer<typeof envSchema>>;
+
+export const audioGenReqSchema = z.object({
+  text_prompt: z.string(),
+  audio_ref_s3_key: z.string(),
+  chat_id: z.string(),
+});
+
+export type AudioGenReq = z.infer<typeof audioGenReqSchema>;
+
+export const videoGenReqSchema = z.object({
+  text_prompt: z.string(),
+  image_s3_key: z.string(),
+  audio_s3_key: z.string(),
+  chat_id: z.string(),
+});
+export type VideoGenReq = z.infer<typeof videoGenReqSchema>;
+
+export const mediaGenResSchema = z.object({
+  job_id: z.string(),
+  ws_url: z.string(),
+});
+
+export type MediaGenRes = z.infer<typeof mediaGenResSchema>;
+
+export const mediaGenEventSchema = z.object({
+  status: z.enum(["started", "completed", "error"]),
+  error: z.string().optional(),
+  s3_url: z.string().url().optional(),
+  s3_key: z.string().optional(),
+  chat_id: z.number().optional(),
+});
+
+export type MediaGenEvent = z.infer<typeof mediaGenEventSchema>;
+```
+
+Let's review the defined schemas:
+
+**CustomContext**
+
+- Extends Telegraf’s `Context` with a `session` object.
+- Stores step-by-step user state (text, audio, image uploads).
+- Uses boolean flags to prevent conflicting or parallel actions.
+
+**Environment Schema (`envSchema`)**
+
+- Validates required environment variables using **Zod**.
+- Covers:
+  - Audio & video generation API URLs
+  - Telegram bot configuration
+  - AWS S3 credentials
+- `Env` guarantees all variables are present and typed.
+
+**API Request Schemas**
+
+- `audioGenReqSchema` – payload for audio generation requests.
+- `videoGenReqSchema` – payload for video generation requests.
+- Ensures outgoing API calls are correctly structured.
+
+**API Response & Event Schemas**
+
+- `mediaGenResSchema` – initial API response (`job_id`, `ws_url`).
+- `mediaGenEventSchema` – WebSocket events for job status updates:
+  - `started`, `completed`, `error`
+  - Optional S3 result metadata and chat ID.
+
+### config.ts implementation
+
+We create config.ts file to load and validate environment variables
+
+```ts
+import { Env, envSchema } from "./schemas.js";
+import dotenv from "dotenv";
+dotenv.config({ override: true });
+
+function parseEnvVariables() {
+  const env = process.env;
+  const parsedEnv = envSchema.safeParse(env);
+
+  if (!parsedEnv.success) {
+    console.log(parsedEnv.error.errors);
+    throw new Error(parsedEnv.error.errors.map((error) => error.message).join("\n"));
+  }
+
+  return parsedEnv.data as Env;
+}
+
+export const envConfig = parseEnvVariables();
+```
+
+This file uses dotenv to load environment variables from a .env file.
+It then validates them against the `envSchema` defined in schemas.ts.
+
+### env file example
+
+```env
+API_URL_AUDIO_GEN=
+# local network 8012 port
+API_URL_VIDEO_GEN=
+
+CHAT_ID=
+PORT=
+WEBHOOK_DOMAIN=
+BOT_TOKEN=
+
+# AWS S3 Credentials
+AWS_ACCESS_KEY=
+AWS_SECRET_KEY=
+AWS_REGION=
+BUCKET_NAME=
+```
+
+### endpoints.ts implementation
+
+We create endpoints.ts file to define the API endpoints for audio and video generation
+
+```ts
+import { envConfig } from "./config.js";
+
+export const video_generation_api = {
+  baseUrl: envConfig.API_URL_VIDEO_GEN,
+
+  generateVideo() {
+    return `${this.baseUrl}/generate-video`;
+  },
+};
+
+export const audio_generation_api = {
+  baseUrl: envConfig.API_URL_AUDIO_GEN,
+
+  generateAudio() {
+    return `${this.baseUrl}/generate-audio`;
+  },
+};
+```
+
+### api.ts implementation
+
+We create api.ts file to implement the API calls for audio and video generation
+
+```ts
+import ky, { Options } from "ky";
+
+type SearchParams = Record<string, string | number | boolean | null | undefined>;
+
+type GetRequestArgs = {
+  url: string;
+  searchParams?: SearchParams;
+};
+
+type DataRequestArgs = {
+  url: string;
+  data: unknown;
+};
+
+async function request<T>(
+  method: "get" | "post" | "patch" | "delete",
+  url: string,
+  options?: Options,
+): Promise<T> {
+  try {
+    return ky[method](url, options).json<T>();
+  } catch (error) {
+    console.error(`Error during ${method.toUpperCase()} request to ${url}:`, error);
+    throw error;
+  }
+}
+
+export async function baseGetKyRequest<T>({ url, searchParams }: GetRequestArgs): Promise<T> {
+  return request<T>("get", url, { searchParams });
+}
+
+export async function baseCreateKyRequest<T>({ url, data }: DataRequestArgs): Promise<T> {
+  return request<T>("post", url, { json: data });
+}
+
+export async function basePatchKyRequest<T>({ url, data }: DataRequestArgs): Promise<T> {
+  return request<T>("patch", url, { json: data });
+}
+
+export async function baseDeleteKyRequest<T>({ url }: { url: string }): Promise<T> {
+  return request<T>("delete", url);
+}
+```
+
+### s3-client implementation
+
+To interact with aws s3 and telegram bot api we created this file
+
+```ts
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { envConfig } from "../config.js";
+import { Telegraf } from "telegraf";
+import { CustomContext } from "@/schemas.js";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { Readable } from "node:stream";
+import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import fs from "fs";
+
+const { AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_REGION } = envConfig;
+
+export const s3ClientInstance = new S3Client({
+  region: AWS_REGION,
+  credentials: {
+    accessKeyId: AWS_ACCESS_KEY,
+    secretAccessKey: AWS_SECRET_KEY,
+  },
+});
+
+export const downloadAndUploadToS3 = async (
+  bot: Telegraf<CustomContext>,
+  fromFileId: string,
+  bucket: string,
+  key: string,
+) => {
+  const link = await bot.telegram.getFileLink(fromFileId);
+
+  const res = await fetch(link.toString());
+  if (!res.body) {
+    throw new Error("No response body from Telegram");
+  }
+
+  // Convert Web Stream → Node stream
+  // @ts-ignore
+  const nodeStream = Readable.fromWeb(res.body as any);
+
+  // Use the Upload helper instead of PutObjectCommand
+  const parallelUploads3 = new Upload({
+    client: s3ClientInstance,
+    params: {
+      Bucket: bucket,
+      Key: key,
+      Body: nodeStream,
+      // Optional: If you want to be safe, grab the length from fetch headers
+      ContentLength: res.headers.get("content-length")
+        ? parseInt(res.headers.get("content-length")!)
+        : undefined,
+    },
+    // Optional tags for fine-tuning
+    queueSize: 4, // concurrent parts
+    partSize: 1024 * 1024 * 5, // 5MB minimum part size
+    leavePartsOnError: false,
+  });
+
+  return await parallelUploads3.done();
+};
+
+export const downloadFromS3AndUploadToTelegram = async (
+  bot: Telegraf<CustomContext>,
+  chatId: string,
+  bucket: string,
+  key: string,
+) => {
+  const response = await s3ClientInstance.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
+  );
+
+  if (!response.Body) {
+    throw new Error("No file body from S3");
+  }
+
+  const fileStream = response.Body.transformToWebStream();
+
+  // Convert Web Stream → Node stream
+  // @ts-ignore
+  const nodeStream = Readable.fromWeb(fileStream as any);
+
+  const result = await bot.telegram.sendDocument(chatId, {
+    source: nodeStream,
+    filename: key,
+  });
+
+  return result;
+};
+
+export const getSignedUrlFromS3 = async (bucket: string, s3Key: string): Promise<string> => {
+  return getSignedUrl(
+    s3ClientInstance,
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: s3Key,
+    }),
+    { expiresIn: 3600 },
+  );
+};
+```
+
+This file provides **AWS S3 utility helpers** for a Telegram bot,
+enabling **file transfers between Telegram and S3** and generating **temporary download links**.
+
+The main functions are:
+
+**`downloadAndUploadToS3`**
+
+- Downloads a file from Telegram using a `file_id`.
+- Streams the file directly to S3 without storing it on disk.
+- Uses `@aws-sdk/lib-storage` `Upload` for multipart, parallel uploads.
+- Optimized for large files and stable uploads.
+
+**`downloadFromS3AndUploadToTelegram`**
+
+- Downloads a file from S3 as a stream.
+- Converts it to a Node.js stream.
+- Sends the file back to a Telegram chat as a document.
+
+### index.ts implementation
+
+Finally, we create index.ts file to set up and run the Telegram bot
+
+```ts
+import dotenv from "dotenv";
+dotenv.config();
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import { Markup, Telegraf, session } from "telegraf";
+import {
+  CustomContext,
+  Env,
+  envSchema,
+  MediaGenRes,
+  mediaGenResSchema,
+  MediaGenEvent,
+  mediaGenEventSchema,
+} from "./schemas.js";
+import WebSocket from "ws";
+import { message } from "telegraf/filters";
+import { baseCreateKyRequest } from "./api.js";
+import { actions, getGenerationInlineKeyboard } from "./keyboards/generation-keyboard.js";
+import { audio_generation_api, video_generation_api } from "./endpoints.js";
+import { downloadAndUploadToS3, downloadFromS3AndUploadToTelegram } from "./services/s3-client.js";
+import { envConfig } from "./config.js";
+import { randomUUID } from "crypto";
+
+// WebSocket reference management
+const activeWebSockets = new Map<string, WebSocket>();
+
+function cleanupWebSocket(key: string) {
+  const ws = activeWebSockets.get(key);
+  if (ws) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+    activeWebSockets.delete(key);
+    console.log(`WebSocket cleaned up for key: ${key}`);
+  }
+}
+
+function getWebSocketKey(chatId: number, jobId: string): string {
+  return `${chatId}-${jobId}`;
+}
+
+function setupWebSocketHandler(
+  wsUrl: string,
+  chatId: number,
+  jobId: string,
+  bot: Telegraf<CustomContext>,
+) {
+  const wsKey = getWebSocketKey(chatId, jobId);
+
+  // Clean up any existing WebSocket for this key
+  cleanupWebSocket(wsKey);
+
+  const ws = new WebSocket(wsUrl);
+
+  // Store the WebSocket reference
+  activeWebSockets.set(wsKey, ws);
+
+  ws.on("open", () => {
+    console.log(`WebSocket connected for chat ${chatId}, job ${jobId}`);
+  });
+
+  ws.on("message", async (data) => {
+    try {
+      console.log("received: %s", data);
+
+      const rawMessage = data.toString();
+      const parsedEvent = mediaGenEventSchema.parse(JSON.parse(rawMessage));
+
+      console.log("Received WebSocket event:", parsedEvent);
+
+      switch (parsedEvent.status) {
+        case "started":
+          await bot.telegram.sendMessage(chatId, "🚀 Generation started! Please wait...");
+          break;
+
+        case "completed":
+          if (parsedEvent.s3_url && parsedEvent.s3_key) {
+            await bot.telegram.sendMessage(chatId, "✅ Generation completed!");
+
+            await downloadFromS3AndUploadToTelegram(
+              bot,
+              String(chatId),
+              envConfig.BUCKET_NAME,
+              parsedEvent.s3_key!,
+            );
+          } else {
+            await bot.telegram.sendMessage(
+              chatId,
+              "✅ Generation completed, but no file was provided.",
+            );
+          }
+          cleanupWebSocket(wsKey);
+          break;
+
+        case "error":
+          const errorMessage = parsedEvent.error || "Unknown error occurred";
+          await bot.telegram.sendMessage(chatId, `❌ Generation failed: ${errorMessage}`);
+          cleanupWebSocket(wsKey);
+          break;
+      }
+    } catch (error) {
+      console.error("Error processing WebSocket message:", error);
+      await bot.telegram.sendMessage(chatId, "❌ Error processing generation update.");
+    }
+  });
+
+  ws.on("error", async (error) => {
+    console.error("WebSocket error:", error);
+    await bot.telegram.sendMessage(chatId, "❌ Connection error occurred during generation.");
+    cleanupWebSocket(wsKey);
+  });
+
+  ws.on("close", () => {
+    console.log(`WebSocket connection closed for chat ${chatId}, job ${jobId}`);
+    activeWebSockets.delete(wsKey);
+  });
+
+  return ws;
+}
+
+async function createAndStartHttpSever() {
+  const app = express();
+
+  const PORT = Number(envConfig.PORT);
+  const botToken = envConfig.BOT_TOKEN;
+
+  app.use(helmet());
+
+  app.use(
+    cors({
+      origin: "*",
+    }),
+  );
+
+  app.use(express.json());
+
+  const bot = new Telegraf<CustomContext>(botToken, {});
+  bot.use(session());
+
+  const webhookDomain = envConfig.WEBHOOK_DOMAIN;
+
+  app.use(await bot.createWebhook({ domain: webhookDomain }));
+
+  function initCtxDefaults(ctx: CustomContext) {
+    ctx.session ??= {
+      // audio generation
+      generateAudioInProgress: false,
+      sendingTextPromptForAudioGeneration: false,
+      sendingAudioRefForAudioGeneration: false,
+      textPrompt: "",
+      audioRefS3Key: "",
+
+      // video generation
+      generateVideoInProgress: false,
+      sendingTextPromptForVideoGeneration: false,
+      sendingImageForVideoGeneration: false,
+      sendingAudioForVideoGeneration: false,
+      textPromptForVideo: "",
+      imageForVideoS3Key: "",
+      audioForVideoS3Key: "",
+    };
+  }
+
+  bot.start(async (ctx) => {
+    initCtxDefaults(ctx);
+
+    await ctx.reply(`
+    Hello! 🌟
+    `);
+  });
+
+  // I have 2 options of generation
+  // 1. generate audio from text and refence audio
+  // 2. generate vido from audio and image and prompt
+
+  bot.telegram.setMyCommands([
+    {
+      command: "generate_audio_or_video",
+      description: "Generate audio from text or video from image and audio",
+    },
+  ]);
+
+  bot.command("generate_audio_or_video", async (ctx) => {
+    initCtxDefaults(ctx);
+    const generationKeyboard = await getGenerationInlineKeyboard();
+    await ctx.reply("Choose generation type:", generationKeyboard);
+  });
+
+  bot.action(actions.generateAudio.handlerRegexp, async (ctx) => {
+    await ctx.reply("You chose to generate Audio");
+
+    ctx.session.generateAudioInProgress = true;
+    ctx.session.sendingTextPromptForAudioGeneration = true;
+
+    return await ctx.reply(
+      "Please send me the text prompt and reference audio.",
+      Markup.inlineKeyboard([
+        Markup.button.callback("Cancel", actions.cancelGenerateAudio.buttonCbAction),
+      ]),
+    );
+  });
+
+  bot.action(actions.cancelGenerateAudio.handlerRegexp, async (ctx) => {
+    ctx.session!.generateAudioInProgress = false;
+    ctx.session!.sendingTextPromptForAudioGeneration = false;
+    ctx.session!.sendingAudioRefForAudioGeneration = false;
+    ctx.session!.textPrompt = "";
+    ctx.session!.audioRefS3Key = "";
+
+    await ctx.reply("Audio generation cancelled.");
+
+    const generationKeyboard = await getGenerationInlineKeyboard();
+    return await ctx.reply("Choose generation type:", generationKeyboard);
+  });
+
+  bot.action(actions.cancelGenerateVideo.handlerRegexp, async (ctx) => {
+    ctx.session!.generateVideoInProgress = false;
+    ctx.session!.sendingTextPromptForVideoGeneration = false;
+    ctx.session!.sendingImageForVideoGeneration = false;
+    ctx.session!.sendingAudioForVideoGeneration = false;
+    ctx.session!.textPromptForVideo = "";
+    ctx.session!.imageForVideoS3Key = "";
+    ctx.session!.audioForVideoS3Key = "";
+
+    await ctx.reply("Video generation cancelled.");
+
+    const generationKeyboard = await getGenerationInlineKeyboard();
+    return await ctx.reply("Choose generation type:", generationKeyboard);
+  });
+
+  bot.action(actions.generateVideo.handlerRegexp, async (ctx) => {
+    await ctx.reply("You chose to generate Video");
+
+    ctx.session.generateVideoInProgress = true;
+    ctx.session.sendingTextPromptForVideoGeneration = true;
+
+    return await ctx.reply(
+      "Please send me the text prompt.",
+      Markup.inlineKeyboard([
+        Markup.button.callback("Cancel", actions.cancelGenerateVideo.buttonCbAction),
+      ]),
+    );
+  });
+
+  bot.on(message("text"), async (ctx) => {
+    ctx.reply("Processing your request...");
+
+    if (ctx.session?.generateAudioInProgress) {
+      if (ctx.session.sendingTextPromptForAudioGeneration) {
+        const textPrompt = ctx.message.text;
+
+        ctx.session.sendingTextPromptForAudioGeneration = false;
+        ctx.session.sendingAudioRefForAudioGeneration = true;
+        ctx.session.textPrompt = textPrompt;
+
+        return await ctx.reply(
+          `Got your text prompt: "${textPrompt}". Now, please send me the reference audio file.`,
+        );
+      }
+    }
+
+    if (ctx.session?.generateVideoInProgress) {
+      if (ctx.session?.sendingTextPromptForVideoGeneration) {
+        const textPromptForVideo = ctx.message.text;
+
+        ctx.session.sendingTextPromptForVideoGeneration = false;
+        ctx.session.sendingImageForVideoGeneration = true;
+        ctx.session.textPromptForVideo = textPromptForVideo;
+
+        return await ctx.reply(
+          `Got your text prompt: "${textPromptForVideo}". Now, please send me the reference image file.`,
+        );
+      }
+    }
+  });
+
+  bot.on(message("photo"), async (ctx) => {
+    await ctx.reply("Processing your image...");
+    if (ctx.session?.generateVideoInProgress) {
+      if (ctx.session?.sendingImageForVideoGeneration) {
+        const photoSizes = ctx.message.photo;
+        const highestResPhoto = photoSizes[photoSizes.length - 1];
+        const fileId = highestResPhoto.file_id;
+
+        try {
+          const imageS3Key = `${fileId}.jpg`;
+          await downloadAndUploadToS3(bot, fileId, envConfig.BUCKET_NAME, imageS3Key);
+
+          ctx.session.sendingImageForVideoGeneration = false;
+          ctx.session.sendingAudioForVideoGeneration = true;
+          ctx.session.imageForVideoS3Key = imageS3Key;
+
+          return await ctx.reply(
+            `Image uploaded successfully. Now, please send me the reference audio file.`,
+          );
+        } catch (error) {
+          console.error("Error uploading image to S3:", error);
+          return await ctx.reply("❌ Failed to upload image. Please try again.");
+        }
+      }
+    }
+  });
+
+  bot.on(message("audio"), async (ctx) => {
+    await ctx.reply("Processing your audio...");
+
+    if (ctx.session?.generateAudioInProgress) {
+      if (ctx.session.sendingAudioRefForAudioGeneration) {
+        const audio = ctx.message.audio;
+        const fileId = audio.file_id;
+
+        const namePrefix = randomUUID();
+        // name contains name and file extension
+        const audioRefS3Key = `${namePrefix}-${audio.file_name}`;
+
+        await downloadAndUploadToS3(bot, fileId, envConfig.BUCKET_NAME, audioRefS3Key);
+
+        ctx.session.sendingAudioRefForAudioGeneration = false;
+        ctx.session.audioRefS3Key = audioRefS3Key;
+
+        const chatId = ctx.chat.id;
+
+        // Now we have both text prompt and audio ref, call the API
+
+        const apiResponse = await baseCreateKyRequest<MediaGenRes>({
+          url: audio_generation_api.generateAudio(),
+          data: {
+            text_prompt: ctx.session.textPrompt,
+            audio_ref_s3_key: ctx.session.audioRefS3Key,
+            chat_id: chatId,
+          },
+        });
+
+        const parsedResponse = mediaGenResSchema.parse(apiResponse);
+
+        // Reset session state
+        ctx.session.generateAudioInProgress = false;
+        ctx.session.textPrompt = "";
+        ctx.session.audioRefS3Key = "";
+
+        // Set up WebSocket handler to listen for events
+        const wsFullUrl = envConfig.API_URL_AUDIO_GEN.replace("http", "ws") + parsedResponse.ws_url;
+        setupWebSocketHandler(wsFullUrl, chatId, parsedResponse.job_id, bot);
+
+        return await ctx.reply(`Audio generation started! Job ID: ${parsedResponse.job_id}`);
+      }
+    }
+
+    if (ctx.session?.generateVideoInProgress) {
+      if (ctx.session.sendingAudioForVideoGeneration) {
+        const audio = ctx.message.audio;
+        const fileId = audio.file_id;
+        const fileName = audio.file_name;
+
+        const audioForVideoS3Key = `${randomUUID()}-${fileName}`;
+        await downloadAndUploadToS3(bot, fileId, envConfig.BUCKET_NAME, audioForVideoS3Key);
+
+        ctx.session.sendingAudioForVideoGeneration = false;
+        ctx.session.audioForVideoS3Key = audioForVideoS3Key;
+
+        const chatId = ctx.chat.id;
+
+        // Now we have text prompt, image and audio, call the API
+
+        const apiResponse = await baseCreateKyRequest<MediaGenRes>({
+          url: video_generation_api.generateVideo(),
+          data: {
+            text_prompt: ctx.session.textPromptForVideo,
+            image_s3_key: ctx.session.imageForVideoS3Key,
+            audio_s3_key: ctx.session.audioForVideoS3Key,
+            chat_id: chatId,
+          },
+        });
+        const parsedResponse = mediaGenResSchema.parse(apiResponse);
+
+        // Reset session state
+        ctx.session.generateVideoInProgress = false;
+        ctx.session.textPromptForVideo = "";
+        ctx.session.imageForVideoS3Key = "";
+        ctx.session.audioForVideoS3Key = "";
+
+        // Set up WebSocket handler to listen for events
+        const wsFullUrl = envConfig.API_URL_VIDEO_GEN.replace("http", "ws") + parsedResponse.ws_url;
+        setupWebSocketHandler(wsFullUrl, chatId, parsedResponse.job_id, bot);
+
+        return await ctx.reply(`Video generation started! Job ID: ${parsedResponse.job_id}`);
+      }
+    }
+  });
+
+  app.get("/", (req, res, next) => {
+    res.json({ message: "app is working" });
+  });
+
+  app.listen(PORT, () => {
+    console.log(`Listening on port http://localhost:${PORT}`);
+  });
+
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}
+
+createAndStartHttpSever();
+```
+
+This file implements a **Telegram bot + Express server** that orchestrates
+**audio and video generation workflows** using external APIs, AWS S3, and WebSockets for real-time updates.
+
+**Server & Bot Setup**
+
+- Loads environment variables and validates configuration.
+- Starts an Express server with security (`helmet`) and CORS enabled.
+- Initializes a Telegraf bot using **webhooks**.
+- Uses session middleware to track multi-step user interactions.
+
+**Session-Based User Flow**
+
+- Manages step-by-step state for:
+  - Audio generation (text → reference audio).
+  - Video generation (text → image → audio).
+- Prevents conflicting actions using boolean session flags.
+- Supports cancellation and resets session state cleanly.
+
+**Telegram Interaction Logic**
+
+- Provides inline keyboards to choose generation type.
+- Handles text, photo, and audio messages based on current session state.
+- Streams uploaded media directly from Telegram to S3.
+
+**Media Generation API Integration**
+
+- Sends generation requests to audio/video APIs.
+- Validates API responses with Zod schemas.
+- Receives a `job_id` and WebSocket URL for progress tracking.
+
+**WebSocket Handling**
+
+- Opens a WebSocket connection per job.
+- Listens for `started`, `completed`, and `error` events.
+- Sends user updates in real time.
+- Downloads generated media from S3 and sends it back to Telegram.
+- Ensures proper WebSocket cleanup per job.
+
+**Overall**
+This file acts as the **main orchestration layer**, connecting Telegram users
+to media generation services with **stateful conversations**, **streamed file handling**,
+and **real-time progress updates**.
+
+### generation-keyboard.ts implementation
+
+We create generation-keyboard.ts file to define the actions for buttons
+that we use in index.ts file
+
+```ts
+import { Markup } from "telegraf";
+
+export const actions = {
+  generateAudio: {
+    buttonCbAction: "generate_audio",
+    handlerRegexp: /generate_audio/i,
+  },
+  cancelGenerateAudio: {
+    buttonCbAction: "cancel_generate_audio",
+    handlerRegexp: /cancel_generate_audio/i,
+  },
+  generateVideo: {
+    buttonCbAction: "generate_video",
+    handlerRegexp: /generate_video/i,
+  },
+  cancelGenerateVideo: {
+    buttonCbAction: "cancel_generate_video",
+    handlerRegexp: /cancel_generate_video/i,
+  },
+};
+
+export async function getGenerationInlineKeyboard() {
+  const buttons = [
+    Markup.button.callback("Generate Audio", actions.generateAudio.buttonCbAction),
+    Markup.button.callback("Generate Video", actions.generateVideo.buttonCbAction),
+  ];
+  return Markup.inlineKeyboard(buttons);
+}
+```
+
+### Resulting file structure
+
+```sh
+├── dist
+├── node_modules
+├── package-lock.json
+├── package.json
+├── README.md
+├── sequence-diagram-with-haxagon-design.excalidraw
+├── src
+├── test.ts
+├── tsconfig.build.json
+└── tsconfig.json
+```
+
+### Running the bot
+
+First of all we have to set the webhook for out bot
+
+```sh
+ngrok http 3050
+```
+
+This command will give you the public url for your local server.
+
+Copy the url and set in **WEBHOOK_DOMAIN** variable in your .env file
+
+To run the Telegram bot, use the following command:
+
+```sh
+node dist/src/index.js
+```
