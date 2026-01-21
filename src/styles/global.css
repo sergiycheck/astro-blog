@@ -1,11 +1,11 @@
 :root {
   /* Colors */
   --background-body: #fff;
-  --text-main: #36393b;
-  --text-secondary: #6b6f72;
+  --text-main: #1f2326;
+  --text-secondary: #4a4f55;
   --primary-color: #548e9b;
   --border-color: #cccccc;
-  --code-text: #555;
+  --code-text: #374151;
   --white: #fff;
 
   /* Typography */
@@ -16,17 +16,19 @@
   /* Font Sizes */
   --font-size-base: 16px;
   --font-size-small: 14px;
-  --font-size-body: 1.3rem;
-  --font-size-body-small: 1.2rem;
+  --font-size-body: 1rem;
+  --font-size-body-small: 0.875rem;
   --font-size-h1: 1.9em;
   --font-size-h2: 1.8em;
   --font-size-h3: 1.5em;
   --font-size-h4: 1.4em;
   --font-size-h5: 1.3em;
   --font-size-h6: 1.2em;
-  --font-size-blockquote: 1.4em;
-  --font-size-table: 1.125em;
+  --font-size-blockquote: 1em;
+  --font-size-table: 0.875rem;
 
+  /* Line Heights */
+  --line-height-base: 1.6;
   /* Line Heights */
   --line-height-base: 1.6;
   --line-height-tight: 1.2;
@@ -81,9 +83,12 @@
 
 :root.theme-dark {
   --background-body: #202122;
-  --text-main: #fff;
-  --text-secondary: #ccc;
+  --text-main: #f5f5f5;
+  --text-secondary: #e0e0e0;
   --primary-color: #548e9b;
+  --border-color: #3a3a3a;
+  --code-text: #e0e0e0;
+  --white: #ffffff;
 }
 
 html {
