@@ -51,7 +51,51 @@ pip install -U "huggingface_hub"
 - **`pip install -U "huggingface_hub"`**
   Updates the Hugging Face Hub client to the latest version (used for downloading/uploading models, auth, etc.).
 
+### ComfyUI-Manager extension installation
+
+ComfyUI Manager exists to solve the biggest pain points of using ComfyUI: dependency chaos, manual updates, and broken workflows.
+
+What problem ComfyUI has without Manager
+
+ComfyUI by itself is just:
+
+- a core engine
+
+- custom nodes
+
+- models
+
+- Python dependencies
+
+Without a manager, you must manually:
+
+- clone GitHub repos
+
+- keep track of node versions
+
+- resolve missing Python packages
+
+- fix broken workflows after updates
+
+- update models and extensions one by one
+
+This becomes painful very fast.
+
+Follow instruction from the repository to install it:
+[ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager)
+
+1. Go to ComfyUI/custom_nodes dir in terminal (cmd)
+2. git clone https://github.com/ltdrdata/ComfyUI-Manager.git
+3. Restart ComfyUI
+
 ### ComfyUI-WanVideoWrapper extension installation
+
+<CdnMedia
+  type="image"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/wan_video_wrapper_extension.webp"
+  alt="ComfyUI WanVideoWrapper Extension Screenshot"
+  width="600"
+/>
 
 This extension allows us to use different workflows for different type of generations.
 Follow instruction from the repository to install it:
@@ -119,3 +163,69 @@ Attaching sageattention that I used to install
   label="Download sageattention wheel"
   size="16 MB"
 />
+
+<br />
+
+### Custom nodes installation
+
+When you first start comfyui with workflow you will get errors about missing nodes.
+
+I prepared a bash script that installs all the missing nodes for this workflow:
+**wanvideo_I2V_InfiniteTalk_example_03.json**
+
+Assume you are in comfyui main folder in terminal run the following commands:
+
+```sh
+cd custom_nodes
+git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git
+git clone https://github.com/kijai/ComfyUI-KJNodes.git
+git clone https://github.com/Comfy-Org/ComfyUI-Manager.git
+git clone https://github.com/kijai/ComfyUI-MelBandRoFormer.git
+git clone https://github.com/kijai/ComfyUI-segment-anything-2.git
+git clone https://github.com/un-seen/comfyui-tensorops.git
+git clone https://github.com/pydn/ComfyUI-to-Python-Extension.git
+git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git
+
+for d in */; do [ -f "$d/requirements.txt" ] && pip install -r "$d/requirements.txt"; done
+cd ..
+```
+
+It also installes ComfyUI-Manager so you can remove that line if you already installed it before.
+This will clone all the required custom nodes into comfyui custom_nodes folder
+and install their dependencies if they have requirements.txt file.
+
+### Models installation
+
+To make this workflow: **wanvideo_I2V_InfiniteTalk_example_03.json** work
+you need to download and install several models.
+
+I prepared another bash script that downloads and installs all the required models.
+
+Assuming you are in comfyui main folder in terminal run the following commands:
+
+```sh
+hf download Kijai/WanVideo_comfy_fp8_scaled InfiniteTalk/Wan2_1-InfiniteTalk-Single_fp8_e4m3fn_scaled_KJ.safetensors --local-dir models/diffusion_models
+hf download Kijai/WanVideo_comfy Wan2_1-I2V-14B-480P_fp8_e4m3fn.safetensors --local-dir models/diffusion_models
+hf download Kijai/MelBandRoFormer_comfy MelBandRoformer_fp16.safetensors --local-dir models/diffusion_models
+hf download Kijai/WanVideo_comfy Wan2_1_VAE_bf16.safetensors --local-dir models/vae
+hf download Comfy-Org/Wan_2.1_ComfyUI_repackaged split_files/clip_vision/clip_vision_h.safetensors --local-dir models/clip_vision
+hf download Kijai/WanVideo_comfy umt5-xxl-enc-bf16.safetensors --local-dir models/text_encoders
+hf download Kijai/WanVideo_comfy Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors --local-dir models/loras
+hf download Kijai/wav2vec2_safetensors wav2vec2-chinese-base_fp16.safetensors --local-dir models/wav2vec2
+```
+
+Here is a table of the models that are needed for this workflow:
+
+| Model name                        | Installation link                                                                                   | File location           |
+| --------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------- |
+| Wan2.1 InfiniteTalk (FP8, scaled) | [Kijai/WanVideo_comfy_fp8_scaled](https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled)           | models/diffusion_models |
+| Wan2.1 I2V 14B 480P (FP8)         | [Kijai/WanVideo_comfy](https://huggingface.co/Kijai/WanVideo_comfy)                                 | models/diffusion_models |
+| MelBandRoFormer (FP16)            | [Kijai/MelBandRoFormer_comfy](https://huggingface.co/Kijai/MelBandRoFormer_comfy)                   | models/diffusion_models |
+| Wan2.1 VAE (BF16)                 | [Kijai/WanVideo_comfy](https://huggingface.co/Kijai/WanVideo_comfy)                                 | models/vae              |
+| CLIP Vision H                     | [Comfy-Org/Wan_2.1_ComfyUI_repackaged](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged) | models/clip_vision      |
+| UMT5 XXL Encoder (BF16)           | [Kijai/WanVideo_comfy](https://huggingface.co/Kijai/WanVideo_comfy)                                 | models/text_encoders    |
+| LightX2V I2V 14B LoRA (BF16)      | [Kijai/WanVideo_comfy](https://huggingface.co/Kijai/WanVideo_comfy)                                 | models/loras            |
+| Wav2Vec2 Chinese Base (FP16)      | [Kijai/wav2vec2_safetensors](https://huggingface.co/Kijai/wav2vec2_safetensors)                     | models/wav2vec2         |
+
+After installation all the required models your ready to run the workflow!
