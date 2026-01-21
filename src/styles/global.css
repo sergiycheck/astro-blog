@@ -458,7 +458,7 @@ input[name="theme-toggle"] {
   }
 }
 
-@media (min-width: var(--screen-lg)) {
+@media (min-width: 1024px) {
   header {
     position: fixed;
     top: 0;

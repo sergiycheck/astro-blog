@@ -19,7 +19,7 @@ allPosts = allPosts.sort(
         const href = `/${post.data.slug}`;
         return (
           <div>
-            {index !== 0 && <hr />}
+            {![0, 1, 2].includes(index) && <hr />}
             <div class="post-item">
               <h2>
                 <a href={href}>{post.data.title}</a>
@@ -41,6 +41,13 @@ allPosts = allPosts.sort(
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     gap: 2rem;
+  }
+
+  @media (max-width: 1024px) {
+    .blog-layout {
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
   }
 
   h2,
