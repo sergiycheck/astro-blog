@@ -1,0 +1,121 @@
+---
+postMain: false
+title: "Part 2 - ComfyUI Setup"
+parentSlug: how-to-create-telegram-bot-with-ai-libs
+slug: how-to-create-telegram-bot-with-ai-libs-part-2
+description: "Installing and configuring ComfyUI, extensions, and SageAttention"
+publishDate: 2026-01-20:00:13:00
+---
+
+import CdnMedia from "../../../components/CdnMedia.astro";
+import CdnFile from "../../../components/CdnFile.astro";
+
+## ComfyUI Setup
+
+To install comfyui locally you have several options
+go to comfyui [install page](https://www.comfy.org/download)
+and follow the instructions there.
+
+I chose manual setup for windows.
+I have gitbash installed on my machine so I can use bash commands on windows.
+
+First of all I installed torch with additional dependencies globally with python because I have
+nvidia gpu I followed instruction from here: [comfyui nvidia pytorch installation
+instruction](https://github.com/Comfy-Org/ComfyUI?tab=readme-ov-file#nvidia)
+
+```sh
+pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu130
+```
+
+Then I cloned comfyui repository
+
+```sh
+git clone https://github.com/Comfy-Org/ComfyUI.git
+```
+
+After that I installed comfyui requirements with the following commands
+in the global python environment
+
+```sh
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+pip install -U "huggingface_hub"
+```
+
+- **`pip install --upgrade pip setuptools wheel`**
+  Updates core Python packaging tools so installs/builds work correctly and avoid common dependency errors.
+
+- **`pip install -r requirements.txt`**
+  Installs all project dependencies listed in `requirements.txt`.
+
+- **`pip install -U "huggingface_hub"`**
+  Updates the Hugging Face Hub client to the latest version (used for downloading/uploading models, auth, etc.).
+
+### ComfyUI-WanVideoWrapper extension installation
+
+This extension allows us to use different workflows for different type of generations.
+Follow instruction from the repository to install it:
+
+[ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper/tree/main)
+
+1. Clone this repo into `custom_nodes` folder.
+2. Install dependencies: `pip install -r requirements.txt`
+   or if you use the portable install, run this in ComfyUI_windows_portable -folder:
+
+`python_embeded\python.exe -m pip install -r ComfyUI\custom_nodes\ComfyUI-WanVideoWrapper\requirements.txt`
+
+I used infinitetalk workflow from this workflow list:
+[ComfyUI-WanVideoWrapper Workflows](https://github.com/kijai/ComfyUI-WanVideoWrapper/tree/main/example_workflows)
+and modified it a bit to fit my needs.
+
+Downloaded `infinite_talk_workflow.json` file
+
+<CdnFile
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/wanvideo_I2V_InfiniteTalk_example_03.json?response-content-disposition=attachment%3B%20filename%3Dwanvideo_I2V_InfiniteTalk_example_03.json"
+  filename="infinite_talk_workflow.json"
+  label="Download infinite_talk_workflow.json"
+  size="14 KB"
+/>
+
+and drag and dropped it into ComfyUI interface to load the workflow.
+
+It should look like this:
+
+<CdnMedia
+  type="image"
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/comfyui-with-infinittalk-workflow.webp"
+  alt="ComfyUI Infinite Talk Workflow Loaded Screenshot"
+  width="600"
+/>
+
+<br />
+### Optinional - sageattention installation
+
+We can use sageattention to speed up generation but installing it
+on windows is tricky.
+You can use this command from [official SageAttention repository](https://github.com/thu-ml/SageAttention?tab=readme-ov-file#install-package):
+
+```sh
+pip install sageattention==2.2.0 --no-build-isolation
+```
+
+But it only worked for me only on Linux on [Runpod](https://www.runpod.io/)
+using their Ubuntu [images](https://hub.docker.com/r/runpod/pytorch)
+
+This repository provides prebuilt wheels for Windows:
+[sageattention releases](https://github.com/sdbds/SageAttention-for-windows/releases)
+
+I downloaded the latest one and installed it with pip
+
+```sh
+pip install sageattention-2.2.0+cu128torch2.9.0.post3-cp39-abi3-win_amd64.whl
+```
+
+Attaching sageattention that I used to install
+
+<CdnFile
+  src="local_comfyui_infinitetalk_indextts_telegram_bot_post/sageattention-2.2.0%2Bcu128torch2.9.0.post3-cp39-abi3-win_amd64.whl"
+  filename="sageattention-2.2.0+cu128torch2.9.0.post3-cp39-abi3-win_amd64.whl"
+  label="Download sageattention wheel"
+  size="16 MB"
+/>

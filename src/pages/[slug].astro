@@ -1,40 +1,45 @@
 ---
-import { getCollection, render } from 'astro:content'
-import readingTime from 'reading-time'
-import BaseLayout from '../layouts/BaseLayout.astro';
-import Bio from '../components/Bio.astro';
-import BlogSidebar from '../components/BlogSidebar.astro';
+import { getCollection, render } from "astro:content";
+import readingTime from "reading-time";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import Bio from "../components/Bio.astro";
+import BlogSidebar from "../components/BlogSidebar.astro";
 
 export async function getStaticPaths() {
-	const posts = await getCollection('posts')
-  return posts.map(p => ({
+  const posts = await getCollection("posts");
+  return posts.map((p) => ({
     params: { slug: p.data.slug },
     props: { post: p },
   }));
 }
 
-const { post } = Astro.props
+const { post } = Astro.props;
 const { title, slug, description, publishDate } = post.data;
-const readingTimeEstimate = readingTime(post.body).text
+const formatPublishDate = new Date(publishDate).toLocaleDateString("en-US", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+const readingTimeEstimate = readingTime(post.body).text;
 const permalink = `${Astro.site.href}blog/${slug}`;
-const { Content } = await render(post)
+const { Content } = await render(post);
 ---
 
 <BaseLayout title={title} description={description} permalink={permalink} current="blog">
   <div class="blog-layout">
     <BlogSidebar currentSlug={slug} />
     <div class="blog-content">
-      <header>
-        <p>{publishDate} ~ {readingTimeEstimate}</p>
+      <div class="container">
+        <p>{formatPublishDate} ~ {readingTimeEstimate}</p>
         <h1>{title}</h1>
         <hr />
-      </header>
+      </div>
       <div class="container">
-    <article class="content">
-      <Content />
-    </article>
-      <hr />
-      <Bio />
+        <article class="content">
+          <Content />
+        </article>
+        <hr />
+        <Bio />
       </div>
     </div>
   </div>
@@ -44,7 +49,7 @@ const { Content } = await render(post)
   .blog-layout {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 0;
+    gap: 2rem;
   }
 
   @media (min-width: 1024px) {

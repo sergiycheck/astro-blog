@@ -1,0 +1,112 @@
+---
+const {
+  src,
+  filename,
+  label,
+  size,
+  openInNewTab = true,
+  download = false,
+  showIcon = true,
+  ...rest
+} = Astro.props;
+
+const CDN = import.meta.env.PUBLIC_CDN_URL;
+const url = src.startsWith("http") ? src : `${CDN}/${src}`;
+
+const rawName = src.split("/").pop();
+const name =
+  label ||
+  filename ||
+  rawName;
+
+const ext = name.split(".").pop()?.toLowerCase();
+
+const iconMap = {
+  pdf: "📄",
+  zip: "🗜️",
+  rar: "🗜️",
+  doc: "📝",
+  docx: "📝",
+  xls: "📊",
+  xlsx: "📊",
+  csv: "📊",
+  json: "📦",
+  mp3: "🎵",
+  wav: "🎵",
+  mp4: "🎬",
+  mov: "🎬",
+  txt: "📃",
+};
+
+const icon = iconMap[ext] || "📁";
+---
+
+<div class="cdn-file">
+  <a
+    href={url}
+    class="cdn-file-link"
+    target={openInNewTab ? "_blank" : undefined}
+    rel={openInNewTab ? "noopener noreferrer" : undefined}
+    download={download}
+    {...rest}
+  >
+    {showIcon && <span class="icon">{icon}</span>}
+    <span class="name">{name}</span>
+    {size && <span class="size">({size})</span>}
+  </a>
+</div>
+
+<style>
+  .cdn-file {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
+  .cdn-file-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-base);
+    border-radius: var(--radius-md);
+    border: var(--border-width-thin) solid var(--border-color);
+    text-decoration: none;
+    color: inherit;
+    background: transparent;
+    transition:
+      background var(--transition-fast) ease,
+      border-color var(--transition-fast) ease,
+      transform 0.1s ease;
+  }
+
+  .cdn-file-link:hover {
+    border-color: var(--primary-color);
+    background: rgba(0, 0, 0, 0.03);
+    transform: translateY(-1px);
+  }
+
+  :root.theme-dark .cdn-file-link:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .cdn-file-link:focus-visible {
+    outline: 2px solid transparent;
+    box-shadow:
+      0 0 0 0.08em var(--primary-color),
+      0 0 0 0.12em var(--white);
+  }
+
+  .icon {
+    font-size: 1.1rem;
+  }
+
+  .name {
+    font-weight: 500;
+    word-break: break-all;
+  }
+
+  .size {
+    color: var(--text-secondary);
+    font-size: var(--font-size-small);
+  }
+</style>

@@ -18,7 +18,7 @@
   --font-size-small: 14px;
   --font-size-body: 1.3rem;
   --font-size-body-small: 1.2rem;
-  --font-size-h1: 4em;
+  --font-size-h1: 1.9em;
   --font-size-h2: 1.8em;
   --font-size-h3: 1.5em;
   --font-size-h4: 1.4em;
@@ -70,6 +70,13 @@
   /* Shadows and Effects */
   --shadow-inset-underline: inset 0 -0.12em 0 var(--primary-color);
   --shadow-inset-full: inset 0 -1.5em 0 var(--primary-color);
+
+  /* Screen sizes */
+  --screen-sm: 640px;
+  --screen-md: 768px;
+  --screen-lg: 1024px;
+  --screen-xl: 1280px;
+  --screen-2xl: 1536px;
 }
 
 :root.theme-dark {
@@ -275,7 +282,7 @@ td {
 
 .container {
   margin: 0 auto;
-  max-width: 42em;
+  max-width: 45em;
   width: 100%;
 }
 
@@ -448,5 +455,17 @@ input[name="theme-toggle"] {
   ol {
     font-size: var(--font-size-body-small);
     margin: var(--space-base) 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background-color: var(--background-body);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   }
 }

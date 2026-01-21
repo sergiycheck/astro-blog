@@ -1,0 +1,157 @@
+---
+postMain: false
+title: "Part 3 - Technical Review of ComfyUI Changes"
+parentSlug: how-to-create-telegram-bot-with-ai-libs
+slug: how-to-create-telegram-bot-with-ai-libs-part-3
+description: "FastAPI server, concurrency, worker wrapper, and WebSocket status streaming"
+publishDate: 2026-01-20:00:14:00
+---
+
+## Technical Review of ComfyUI Changes
+
+### api.py File Explanation
+
+[View api.py changes on GitHub](https://github.com/sergiycheck/comfyui-infinitetalk/pull/1/files#diff-1ed02c3495a2cbdfb7310b80b4a533d180f77b750ebf1e23a86d0d93e5872178)
+
+This file runs a FastAPI server that generates videos
+using a heavy background worker (infinite_talk_worker) and
+streams real-time job status updates to clients via WebSockets,
+while limiting how many jobs can run at once.
+
+High-level flow:
+
+- Client sends a POST request to start video generation.
+- Server starts the job in a separate process.
+- Job progress and result are pushed into a multiprocessing queue.
+- A WebSocket connection streams status updates back to the client.
+- Only one job at a time is allowed.
+
+We are able to prevent running multiple jobs because we have concurrency control:
+
+```py
+MAX_CONCURRENT_JOBS = 1
+job_semaphore = mp.Semaphore(MAX_CONCURRENT_JOBS)
+```
+
+This Ensures only one generation job can run at the same time
+and pensures only one generation job can run at the same time
+and prevents server overload.
+
+The core generation logic is in:
+
+**Worker process wrapper**
+
+```py
+def infinite_talk_worker_wrapper(...)
+```
+
+Runs inside a separate OS process.
+
+- Runs inside a separate OS process.
+- Sends "started" status immediately.
+- Calls `infinite_talk_worker(...)`.
+- Pushes the final result (or error) into a queue.
+- Always releases the semaphore.
+
+Another interesting thing is the **WebSocket event forwarder**:
+
+```py
+async def ws_event_forwarder(...)
+```
+
+It waits for the client to connect via WebSocket.
+
+- Waits for the client to connect via WebSocket.
+- Reads messages from the multiprocessing queue.
+- Sends JSON updates to the client in real time.
+- Stops on "completed" or "error".
+
+With this functionality, we're able to get the generated video link in the Telegram bot.
+
+The main entry point is the **start generation endpoint**:
+
+```py
+@app.post("/generate-video")
+```
+
+This Tries to acquire the semaphore.
+This:
+
+- Tries to acquire the semaphore.
+- Returns 429 if the server is busy.
+- Creates:
+  - A unique `job_id`
+  - A multiprocessing queue
+  - A new background process
+- Starts a WebSocket forwarder task.
+- Returns the `job_id` to the client.
+
+And the **WebSocket endpoint**:
+
+```py
+@app.websocket("/ws/{job_id}")
+```
+
+What it does:
+
+- Accepts WebSocket connections per job.
+- Stores active connections in memory.
+- Keeps connection alive until client disconnects.
+- Cleans up on disconnect.
+
+### handler.py Explanation
+
+In this file, we have a function named `infinite_talk_worker`
+that accepts:
+
+- Image S3 key
+- Audio S3 key
+- Text prompt
+
+It downloads all the required files from AWS S3 storage
+and then uses them with a ComfyUI workflow that's encapsulated in the
+`generate` function from the `infinitetalk_comfy_reusable` file:
+
+```py
+generate(
+    local_image_name_input_folder=image_path,
+    local_audio_name_input_folder=audio_path,
+    positive_prompt=text_prompt,
+    negative_prompt=negative_prompt,
+    output_video_width=360,
+    output_video_height=400,
+    output_video_prefix=output_video_prefix,
+)
+```
+
+After generation is complete:
+
+- We upload the generated video file to S3
+- Clean up local temporary files
+- Return status with S3 link and key:
+
+```py
+return {"status": "completed", "s3_url": s3_url, "s3_key": generated_video_name}
+```
+
+### infinitetalk_comfy_reusable.py explanation
+
+Explanation
+
+This file contains logic from the ComfyUI workflow.
+
+We used a special ComfyUI extension to generate Python code from the ComfyUI workflow:
+[ComfyUI to Python Extension](https://github.com/pydn/ComfyUI-to-Python-Extension)
+
+### A
+
+After all those changes and some custom utils with s3 interactions
+I start the server with this command
+
+```sh
+python -m uvicorn api:app --host 0.0.0.0 --port 8012
+```
+
+Now comfyui accessible on local network on port 8012 and I can use it in telegram bot
+
+That's the main things that I changed and wanted to mention.

@@ -1,0 +1,60 @@
+---
+postMain: false
+title: "Part 4 - Index TTS Changes"
+parentSlug: how-to-create-telegram-bot-with-ai-libs
+slug: how-to-create-telegram-bot-with-ai-libs-part-4
+description: "Index TTS generation flow, API endpoints, and worker setup"
+publishDate: 2026-01-20:00:15:00
+---
+
+## Index TTS Changes
+
+[view index tts changes on gihutb](https://github.com/sergiycheck/index-tts/pull/1/files)
+
+[api.py file changes on github](https://github.com/sergiycheck/index-tts/pull/1/files#diff-1ed02c3495a2cbdfb7310b80b4a533d180f77b750ebf1e23a86d0d93e5872178)
+
+contains the main logic of text to speech generation and it uses the same
+approach as comfyui api file
+we have a semaphore to limit concurrent jobs
+we have a worker wrapper that runs in separate process
+we have a websocket forwarder to stream status updates to the client
+
+and we have two endpoints
+one for starting generation
+and one for websocket connection
+
+core generation happens in this file
+[handler.py](https://github.com/sergiycheck/index-tts/pull/1/files#diff-ac1d62d43a3e7a79cf50e33efb92d91e9f477e36564a97a44bcf4853e962f016)
+it also accepts audio ref s3 key and text prompt
+downlaods required files from s3
+and uses IndexTTS2 class imported from
+
+indextts.infer_v2 module to generate the speech
+
+```py
+tts = IndexTTS2(
+    cfg_path=os.path.join("checkpoints", "config.yaml"),
+    model_dir=os.path.join("checkpoints"),
+    use_fp16=True,
+    use_cuda_kernel=False,
+    use_deepspeed=False,
+)
+
+print("Generating audio...", now_local_str())
+
+output_path = os.path.join(output_dir, f"{uuid.uuid4()}.wav")
+
+tts.infer(
+    spk_audio_prompt=audio_ref_path,
+    text=text_prompt,
+    output_path=output_path,
+    emo_alpha=0.6,
+    use_emo_text=True,
+    use_random=False,
+    verbose=True,
+)
+```
+
+As we can see, generation happens in the `tts.infer` function call.
+After generation is complete,
+we upload the generated audio to S3 and return the S3 link and key to the client.

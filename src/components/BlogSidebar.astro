@@ -2,37 +2,22 @@
 import { getCollection } from "astro:content";
 
 const allPosts = (await getCollection("posts")).sort(
-  (a, b) => new Date(b.data.publishDate).valueOf() - new Date(a.data.publishDate).valueOf(),
+  (a, b) => new Date(a.data.publishDate).valueOf() - new Date(b.data.publishDate).valueOf(),
 );
 
-// Group posts by their folder path
-const groupedPosts = allPosts.reduce(
-  (acc, post) => {
-    // Extract folder from the post id (e.g., "blog-posts/my-post.md" -> "blog-posts")
-    const parts = post.id.split("/");
-    const folder = parts.length > 1 ? parts.slice(0, -1).join("/") : "root";
-
-    if (!acc[folder]) {
-      acc[folder] = [];
+// Build hierarchy: top-level items (postMain: true) and nested items by parentSlug
+const mainPosts = allPosts.filter((p) => p.data.postMain);
+const childrenByParent = allPosts.reduce(
+  (acc, p) => {
+    if (!p.data.postMain && p.data.parentSlug) {
+      const key = p.data.parentSlug;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(p);
     }
-    acc[folder].push(post);
     return acc;
   },
   {} as Record<string, typeof allPosts>,
 );
-
-// Format folder name for display
-const formatFolderName = (folder: string) => {
-  if (folder === "root") return "Posts";
-  return (
-    folder
-      .split("/")
-      .pop()
-      ?.split("-")
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ") || folder
-  );
-};
 
 const { currentSlug } = Astro.props;
 ---
@@ -48,18 +33,41 @@ const { currentSlug } = Astro.props;
 
   <nav class="sidebar-nav" id="sidebar-nav">
     {
-      Object.entries(groupedPosts).map(([folder, posts]) => (
-        <div class="folder-group">
-          <div class="folder-header">{formatFolderName(folder)}</div>
-          <ul class="post-list">
-            {posts.map((post) => (
-              <li class:list={["post-item", { active: currentSlug === post.data.slug }]}>
-                <a href={`/${post.data.slug}`}>{post.data.title}</a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))
+      mainPosts.map((main) => {
+        const children = (childrenByParent[main.data.slug] || []).sort(
+          (a, b) => new Date(a.data.publishDate).valueOf() - new Date(b.data.publishDate).valueOf(),
+        );
+        const isActiveGroup =
+          currentSlug === main.data.slug || children.some((c) => c.data.slug === currentSlug);
+        return (
+          <div class:list={["folder-group", { open: isActiveGroup }]}>
+            <div
+              class:list={["folder-header", { open: isActiveGroup }]}
+              data-parent={main.data.slug}
+            >
+              <button
+                class="group-toggle"
+                aria-expanded={isActiveGroup}
+                aria-controls={`children-${main.data.slug}`}
+              >
+                <span class="caret" />
+              </button>
+              <a href={`/${main.data.slug}`}>{main.data.title}</a>
+            </div>
+            <ul
+              id={`children-${main.data.slug}`}
+              class:list={["post-list", "children", { open: isActiveGroup }]}
+              aria-hidden={!isActiveGroup}
+            >
+              {children.map((post) => (
+                <li class:list={["post-item", { active: currentSlug === post.data.slug }]}>
+                  <a href={`/${post.data.slug}`}>{post.data.title}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })
     }
   </nav>
 </aside>
@@ -95,6 +103,25 @@ const { currentSlug } = Astro.props;
         sidebar?.classList.remove("open");
         burgerToggle?.classList.remove("active");
       }
+    });
+  });
+
+  // Toggle nested groups: click header to show/hide children
+  sidebarNav?.querySelectorAll<HTMLElement>(".folder-header").forEach((header) => {
+    header.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      // Don't toggle when clicking the actual link
+      if (target.closest("a")) return;
+
+      const group = header.parentElement;
+      const children = group?.querySelector<HTMLElement>(".children");
+      const toggleBtn = header.querySelector<HTMLElement>(".group-toggle");
+
+      const isOpen = header.classList.toggle("open");
+      group?.classList.toggle("open", isOpen);
+      children?.classList.toggle("open", isOpen);
+      if (toggleBtn) toggleBtn.setAttribute("aria-expanded", String(isOpen));
+      if (children) children.setAttribute("aria-hidden", String(!isOpen));
     });
   });
 </script>
@@ -160,12 +187,46 @@ const { currentSlug } = Astro.props;
   }
 
   .folder-header {
-    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.95rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 0.5rem;
-    padding-bottom: 0.25rem;
+    letter-spacing: 0.02em;
+    margin-bottom: 0.25rem;
+    padding: 0.25rem 0.25rem;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .folder-header a {
+    text-decoration: none;
+    color: var(--text-main);
+  }
+
+  .group-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .caret {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--text-secondary);
+    transition: transform 0.2s ease;
+  }
+
+  .folder-header.open .caret {
+    transform: rotate(180deg);
   }
 
   .post-list {
@@ -175,6 +236,17 @@ const { currentSlug } = Astro.props;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+  }
+
+  .post-list.children {
+    display: none;
+    padding-left: 0.75rem;
+    border-left: 2px solid var(--border-color);
+    margin-left: 0.25rem;
+  }
+
+  .post-list.children.open {
+    display: flex;
   }
 
   .post-item a {

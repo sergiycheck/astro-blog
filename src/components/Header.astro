@@ -6,16 +6,6 @@ const { current = "" } = Astro.props;
 ---
 
 <style>
-  header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    background-color: var(--background-body);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  }
-
   .header-inner {
     display: flex;
     align-items: center;
@@ -26,7 +16,7 @@ const { current = "" } = Astro.props;
     width: 100%;
   }
 
-  @media screen and (max-width: 520px) {
+  @media screen and (max-width: var(--screen-sm, 640px)) {
     .header-inner {
       padding: var(--space-sm) 0;
     }
