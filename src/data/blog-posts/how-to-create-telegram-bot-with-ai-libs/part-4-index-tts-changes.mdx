@@ -1,60 +1,300 @@
 ---
 postMain: false
-title: "Part 4 - Index TTS Changes"
+title: "Part 4 - Review of Index TTS Changes for api integration"
 parentSlug: how-to-create-telegram-bot-with-ai-libs
 slug: how-to-create-telegram-bot-with-ai-libs-part-4
 description: "Index TTS generation flow, API endpoints, and worker setup"
 publishDate: 2026-01-20:00:15:00
 ---
 
-## Index TTS Changes
+## Review of Index TTS Changes for api integration
 
-[view index tts changes on gihutb](https://github.com/sergiycheck/index-tts/pull/1/files)
+Table of Contents:
 
-[api.py file changes on github](https://github.com/sergiycheck/index-tts/pull/1/files#diff-1ed02c3495a2cbdfb7310b80b4a533d180f77b750ebf1e23a86d0d93e5872178)
+- [api.py Explanation](#apipy-explanation)
+- [handler.py Explanation](#handlerpy-explanation)
+- [Resulting file structure](#resulting-file-structure)
+- [Utils review](#utils-review)
+- [Running the server](#running-the-server)
 
-contains the main logic of text to speech generation and it uses the same
-approach as comfyui api file
-we have a semaphore to limit concurrent jobs
-we have a worker wrapper that runs in separate process
-we have a websocket forwarder to stream status updates to the client
+### api.py Explanation
 
-and we have two endpoints
-one for starting generation
-and one for websocket connection
-
-core generation happens in this file
-[handler.py](https://github.com/sergiycheck/index-tts/pull/1/files#diff-ac1d62d43a3e7a79cf50e33efb92d91e9f477e36564a97a44bcf4853e962f016)
-it also accepts audio ref s3 key and text prompt
-downlaods required files from s3
-and uses IndexTTS2 class imported from
-
-indextts.infer_v2 module to generate the speech
+We're creating the same api.py as in comfyui changes part
+but this time for Index TTS text to speech generation library
 
 ```py
-tts = IndexTTS2(
-    cfg_path=os.path.join("checkpoints", "config.yaml"),
-    model_dir=os.path.join("checkpoints"),
-    use_fp16=True,
-    use_cuda_kernel=False,
-    use_deepspeed=False,
-)
+from dotenv import load_dotenv
 
-print("Generating audio...", now_local_str())
+load_dotenv()
 
-output_path = os.path.join(output_dir, f"{uuid.uuid4()}.wav")
+import os
+import uuid
+import json
+import multiprocessing as mp
+import asyncio
 
-tts.infer(
-    spk_audio_prompt=audio_ref_path,
-    text=text_prompt,
-    output_path=output_path,
-    emo_alpha=0.6,
-    use_emo_text=True,
-    use_random=False,
-    verbose=True,
-)
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
+from typing import Dict
+from handler import tts_worker
+from utils import now_local_str
+
+MAX_CONCURRENT_JOBS = 1
+job_semaphore = mp.Semaphore(MAX_CONCURRENT_JOBS)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = FastAPI()
+active_connections: Dict[str, WebSocket] = {}
+queues: Dict[str, mp.Queue] = {}
+
+
+class AudioRequest(BaseModel):
+    text_prompt: str
+    audio_ref_s3_key: str
+    chat_id: int
+
+
+def tts_worker_wrapper(request: dict, queue: mp.Queue, job_semaphore: mp.Semaphore):
+    try:
+        queue.put({"status": "started"})
+        print("Starting generation", now_local_str())
+
+        chat_id = request["chat_id"]
+
+        result = tts_worker(
+            audio_ref_s3_key=request["audio_ref_s3_key"],
+            text_prompt=request["text_prompt"],
+        )
+
+        result_full = {**result, "chat_id": chat_id}
+
+        queue.put(result_full)
+
+    except Exception as e:
+        queue.put({"status": "error", "error": str(e)})
+
+    finally:
+        job_semaphore.release()
+
+
+async def ws_event_forwarder(job_id: str, queues: mp.Queue):
+    try:
+        waiting_for_connection_time = 10  # seconds
+        while True:
+            websocket = active_connections.get(job_id)
+            waiting_for_connection_time -= 1
+            await asyncio.sleep(1)
+            if not websocket and waiting_for_connection_time <= 0:
+                break
+            if websocket:
+                break
+
+        while True:
+            msg = await asyncio.to_thread(queues[job_id].get)
+            if hasattr(websocket, "send_text") and callable(
+                getattr(websocket, "send_text")
+            ):
+                await websocket.send_text(json.dumps(msg))
+            if msg["status"] in ("completed", "error"):
+                break
+    except Exception as e:
+        print(f"Error in ws_event_forwarder: {e}")
+        raise e
+
+
+@app.post("/generate-audio")
+async def generate_audio(request: AudioRequest):
+    acquired = job_semaphore.acquire(block=False)
+    if not acquired:
+        raise HTTPException(429, "Server busy")
+
+    job_id = str(uuid.uuid4())
+    queue = mp.Queue()
+    queues[job_id] = queue
+
+    process = mp.Process(
+        target=tts_worker_wrapper, args=(request.dict(), queue, job_semaphore)
+    )
+    process.start()
+    asyncio.create_task(ws_event_forwarder(job_id, queues))
+
+    return {"job_id": job_id, "ws_url": f"/ws/{job_id}"}
+
+
+@app.websocket("/ws/{job_id}")
+async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    active_connections[job_id] = websocket
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        active_connections.pop(job_id, None)
 ```
 
-As we can see, generation happens in the `tts.infer` function call.
-After generation is complete,
-we upload the generated audio to S3 and return the S3 link and key to the client.
+**What this code does**
+
+- Implements a **FastAPI** service for **text-to-speech generation**.
+- Uses **multiprocessing** to run a blocking `tts_worker` in a separate process.
+- Limits concurrent jobs with a **global semaphore** (`MAX_CONCURRENT_JOBS = 1`).
+- Streams job status and results to clients via **WebSocket**.
+- Uses **queues (mp.Queue)** for inter-process communication.
+
+Flow Overview
+
+1. **POST `/generate-audio`**
+   - Validates input with `AudioRequest`.
+   - Tries to acquire a semaphore (rate limiting).
+   - Creates a `job_id`, queue, and worker process.
+   - Returns `job_id` and WebSocket URL.
+
+2. **Worker Process (`tts_worker_wrapper`)**
+   - Sends `"started"` status to the queue.
+   - Calls `tts_worker(...)`.
+   - Pushes result or error to the queue.
+   - Releases the semaphore.
+
+3. **WebSocket (`/ws/{job_id}`)**
+   - Client connects using `job_id`.
+   - `ws_event_forwarder` forwards queue messages to the socket.
+   - Stops on `"completed"` or `"error"`.
+
+This setup allows clients to request TTS generation and receive real-time updates on the job status via WebSocket,
+while ensuring that only a limited number of jobs run concurrently.
+
+### handler.py Explanation
+
+We're creating the same handler.py as in comfyui changes part
+but this time for Index TTS text to speech generation library
+
+```py
+import multiprocessing as mp
+import os
+from boto3_utils import download_s3_file, upload_s3_file
+from utils import now_local_str
+from indextts.infer_v2 import IndexTTS2
+import uuid
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def tts_worker(audio_ref_s3_key: str, text_prompt: str):
+    try:
+        bucket_name = os.getenv("S3_BUCKET_NAME")
+
+        if not bucket_name:
+            raise RuntimeError("S3_BUCKET_NAME environment variable is not set")
+
+        output_dir = os.path.join(BASE_DIR, "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        print("Downloading reference audio from S3...", now_local_str())
+
+        audio_ref_path = download_s3_file(
+            bucket=bucket_name, key=audio_ref_s3_key, local_path=output_dir
+        )
+
+        print("Loading IndexTTS2 model...", now_local_str())
+
+        tts = IndexTTS2(
+            cfg_path=os.path.join("checkpoints", "config.yaml"),
+            model_dir=os.path.join("checkpoints"),
+            use_fp16=True,
+            use_cuda_kernel=False,
+            use_deepspeed=False,
+        )
+
+        print("Generating audio...", now_local_str())
+
+        output_path = os.path.join(output_dir, f"{uuid.uuid4()}.wav")
+
+        tts.infer(
+            spk_audio_prompt=audio_ref_path,
+            text=text_prompt,
+            output_path=output_path,
+            emo_alpha=0.6,
+            use_emo_text=True,
+            use_random=False,
+            verbose=True,
+        )
+
+        generated_file = os.path.basename(output_path)
+
+        print("Uploading generated audio to S3...", now_local_str())
+
+        upload_s3_file(
+            local_path=os.path.join(output_dir, generated_file),
+            bucket=bucket_name,
+        )
+
+        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{generated_file}"
+        s3_key = generated_file
+        print("Job completed.", now_local_str())
+        print("Generated audio S3 URL:", s3_url)
+
+        return {"status": "completed", "s3_url": s3_url, "s3_key": s3_key}
+    except Exception as e:
+        print(f"Error in tts_worker: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        os.remove(audio_ref_path)
+        os.remove(output_path)
+```
+
+**What this code does**
+
+- Downloads a **reference audio file from S3**.
+- Loads the **IndexTTS2** model.
+- Generates TTS audio using the reference speaker + text prompt.
+- Uploads the generated `.wav` back to **S3**.
+- Returns S3 metadata to the caller.
+
+**Execution Flow**
+
+1. Read `S3_BUCKET_NAME` from environment.
+2. Ensure local `output/` directory exists.
+3. Download reference audio from S3.
+4. Load IndexTTS2 model from `checkpoints/`.
+5. Run `tts.infer(...)` to generate audio.
+6. Upload generated audio to S3.
+7. Return `{ status, s3_url, s3_key }`.
+8. Cleanup local files in `finally`.
+
+### Utils review
+
+We're using the same boto3_utils.py and utils.py as in comfyui changes part without any changes.
+
+### Resulting file structure
+
+```sh
+├── api.py
+├── archive
+├── assets
+├── boto3_utils.py
+├── checkpoints
+├── DISCLAIMER
+├── docs
+├── examples
+├── handler.py
+├── indextts
+├── LICENSE
+├── LICENSE_ZH.txt
+├── MANIFEST.in
+├── output
+├── pyproject.toml
+├── README.md
+├── run_tts.py
+├── tests
+├── tools
+├── utils.py
+├── uv.lock
+├── webui.py
+```
+
+### Running the server
+
+```sh
+python -m uvicorn api:app --host 0.0.0.0 --port 8011
+```
+
+Now Index TTS api server accessible on local network on port 8011 and I can use it in telegram bot.

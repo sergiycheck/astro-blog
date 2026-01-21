@@ -1,11 +1,11 @@
 :root {
   /* Colors */
   --background-body: #fff;
-  --text-main: #36393b;
-  --text-secondary: #6b6f72;
+  --text-main: #1f2326;
+  --text-secondary: #4a4f55;
   --primary-color: #548e9b;
   --border-color: #cccccc;
-  --code-text: #555;
+  --code-text: #374151;
   --white: #fff;
 
   /* Typography */
@@ -83,9 +83,12 @@
 
 :root.theme-dark {
   --background-body: #202122;
-  --text-main: #fff;
-  --text-secondary: #ccc;
+  --text-main: #f5f5f5;
+  --text-secondary: #e0e0e0;
   --primary-color: #548e9b;
+  --border-color: #3a3a3a;
+  --code-text: #e0e0e0;
+  --white: #ffffff;
 }
 
 html {
